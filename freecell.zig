@@ -1,17 +1,17 @@
 const std = @import("std");
 
-const Card = u8;
-const CARD_NONE: Card = 0; // Represents no card or an empty slot
+pub const Card = u8;
+pub const CARD_NONE: Card = 0; // Represents no card or an empty slot
 
 // hearts (♥), diamonds (♦), clubs (♣), spades (♠)
 
-const RED_BIT: u8 = 1 << 7;
+pub const RED_BIT: u8 = 1 << 7;
 
-fn color(c: Card) u8 {
+pub fn color(c: Card) u8 {
     return c & RED_BIT;
 }
 
-const Suit = enum(u8) {
+pub const Suit = enum(u8) {
     Spades = 0,
     Clubs = (1 << 6),
     Hearts = RED_BIT | (0),
@@ -19,15 +19,15 @@ const Suit = enum(u8) {
 };
 
 // index in the suit order (0-3)
-fn suitIndex(suit: Suit) usize {
+pub fn suitIndex(suit: Suit) usize {
     return @intFromEnum(suit) >> 6;
 }
 
-fn makeCard(suit: Suit, rank: u8) Card {
+pub fn makeCard(suit: Suit, rank: u8) Card {
     return @intFromEnum(suit) | rank;
 }
 
-fn suitString(suit: Suit) []const u8 {
+pub fn suitString(suit: Suit) []const u8 {
     return switch (suit) {
         .Spades => "S",
         .Clubs => "C",
@@ -40,7 +40,7 @@ fn suitString(suit: Suit) []const u8 {
     };
 }
 
-fn rankName(rank: u8) u8 {
+pub fn rankName(rank: u8) u8 {
     return switch (rank) {
         1 => 'A',
         10 => '0',
@@ -51,7 +51,7 @@ fn rankName(rank: u8) u8 {
     };
 }
 
-fn canMoveBelow(card: Card, target: Card) bool {
+pub fn canMoveBelow(card: Card, target: Card) bool {
     const cardRank = card & 0b0000_1111;
     const targetRank = target & 0b0000_1111;
 
@@ -85,16 +85,16 @@ fn cardName(card: Card) []const u8 {
     }
 }
 
-const NUM_COLUMNS = 8;
-const TABLEAU_SIZE = 64;
+pub const NUM_COLUMNS = 8;
+pub const TABLEAU_SIZE = 64;
 
-const Board = struct {
+pub const Board = struct {
     cells: [4]Card = [_]Card{CARD_NONE} ** 4, // Free cells
     piles: [4]u8 = [_]u8{0} ** 4, // Foundation piles (top card rank)
     columns: [NUM_COLUMNS][2]u8 = .{ .{ 0, 7 }, .{ 8, 15 }, .{ 16, 23 }, .{ 24, 31 }, .{ 32, 38 }, .{ 40, 46 }, .{ 48, 54 }, .{ 56, 62 } }, // Column ranges (start, end)
     cards: [TABLEAU_SIZE]Card = [_]Card{CARD_NONE} ** TABLEAU_SIZE, // Cards in the tableau
 
-    fn init(board: *Board, deck: *[52]Card) void {
+    pub fn init(board: *Board, deck: *[52]Card) void {
         board.* = .{};
         var i: u8 = 0;
         var j: u8 = 0;
@@ -112,7 +112,7 @@ const Board = struct {
 
     // slots: columns 0-7, free cells 8-11, foundation piles 12-15
 
-    fn cardInSlot(board: *const Board, slot: u8) Card {
+    pub fn cardInSlot(board: *const Board, slot: u8) Card {
         if (slot < NUM_COLUMNS) {
             const col = board.columns[slot];
             if (col[0] < col[1]) {
@@ -129,13 +129,88 @@ const Board = struct {
         return CARD_NONE; // Empty slot
     }
 
-    // TODO: fix
-    fn makeMove(board: *Board, from: u8, to: u8) void {
-        const card = board.cardInSlot(from);
-        if (card == CARD_NONE) return; // No card to move
+    pub fn numCardsInColumn(board: *const Board, column: u8) u8 {
+        return board.columns[column][1] - board.columns[column][0];
     }
 
-    fn print(board: *const Board) void {
+    pub fn numCardsOnTableau(board: *const Board) u8 {
+        var total: u8 = 0;
+        for (board.columns) |col| {
+            total += col[1] - col[0];
+        }
+        return total;
+    }
+
+    /// Checks if the column is full (i.e., has no free spaces for moving cards into it
+    pub fn columnIsFull(board: *const Board, column: u8) bool {
+        if (column == NUM_COLUMNS - 1) {
+            return board.columns[column][1] == TABLEAU_SIZE;
+        } else {
+            return board.columns[column][1] == board.columns[column + 1][0];
+        }
+    }
+
+    /// Guarantees that there are free spaces between columns for moving cards around
+    pub fn reallocateColumns(board: *Board) void {
+        const old_cards = board.cards;
+        const old_columns = board.columns;
+        const num_free_places = TABLEAU_SIZE - board.numCardsOnTableau();
+        const free_per_column = @divTrunc(num_free_places, NUM_COLUMNS);
+        var idx: u8 = 0;
+        for (&board.columns, 0..) |*col, j| {
+            col[0] = idx;
+            col[1] = idx + old_columns[j][1] - old_columns[j][0];
+            @memcpy(board.cards[col[0]..col[1]], old_cards[old_columns[j][0]..old_columns[j][1]]);
+            idx = col[1] + free_per_column; // Add free spaces between columns
+        }
+    }
+
+    pub fn takeCardFromSlot(board: *Board, slot: u8) Card {
+        const card = board.cardInSlot(slot);
+        if (card == CARD_NONE) return CARD_NONE; // No card to take
+
+        // Remove card from source
+        if (slot < NUM_COLUMNS) {
+            // Taking from a column
+            board.columns[slot][1] -= 1;
+        } else if (slot < NUM_COLUMNS + 4) {
+            // Taking from a free cell
+            board.cells[slot - NUM_COLUMNS] = CARD_NONE;
+        } else if (slot < NUM_COLUMNS + 8) {
+            // Taking from a foundation pile
+            const pileIndex = slot - NUM_COLUMNS - 4;
+            board.piles[pileIndex] -= 1;
+        }
+
+        return card;
+    }
+
+    pub fn putCardInSlot(board: *Board, slot: u8, card: Card) void {
+        if (slot < NUM_COLUMNS) {
+            // Putting into a column
+            // Check if target column is full and reallocate if needed
+            if (board.columnIsFull(slot)) {
+                board.reallocateColumns();
+            }
+            board.cards[board.columns[slot][1]] = card;
+            board.columns[slot][1] += 1;
+        } else if (slot < NUM_COLUMNS + 4) {
+            // Putting into a free cell
+            board.cells[slot - NUM_COLUMNS] = card;
+        } else if (slot < NUM_COLUMNS + 8) {
+            // Putting into a foundation pile
+            const pileIndex = slot - NUM_COLUMNS - 4;
+            board.piles[pileIndex] += 1;
+        }
+    }
+
+    pub fn makeMove(board: *Board, from: u8, to: u8) void {
+        const card = board.takeCardFromSlot(from);
+        if (card == CARD_NONE) return; // No card to move
+        board.putCardInSlot(to, card);
+    }
+
+    pub fn print(board: *const Board) void {
         std.debug.print("  |", .{});
         for (board.cells) |cell| {
             printCard(cell);
@@ -172,7 +247,7 @@ const Board = struct {
         }
     }
 
-    fn findValidMoves(board: *const Board) void {
+    pub fn findValidMoves(board: *const Board) void {
         var i: u8 = 0;
         while (i < NUM_COLUMNS - 1) : (i += 1) {
             const card_i = board.cardInSlot(i);
@@ -206,7 +281,7 @@ const Board = struct {
     }
 };
 
-fn makeDeck() [52]Card {
+pub fn makeDeck() [52]Card {
     var cards: [52]Card = undefined;
     var index: usize = 0;
 
