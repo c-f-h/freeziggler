@@ -279,6 +279,32 @@ pub const Board = struct {
             //}
         }
     }
+
+    /// Returns a hash of the board state for use in hash maps or detecting duplicate positions
+    pub fn hash(board: *const Board) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+
+        // Hash free cells
+        hasher.update(&board.cells);
+
+        // Hash foundation piles
+        hasher.update(&board.piles);
+
+        const delimiter = [1]u8{0xFF};
+
+        // Hash only the cards that are on the tableau (between start and end of each column)
+        for (board.columns) |col| {
+            const start = col[0];
+            const end = col[1];
+            if (start < end) {
+                hasher.update(board.cards[start..end]);
+            }
+            // hash column delimiter
+            hasher.update(&delimiter);
+        }
+
+        return hasher.final();
+    }
 };
 
 pub fn makeDeck() [52]Card {

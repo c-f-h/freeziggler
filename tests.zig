@@ -622,3 +622,187 @@ test "makeMove - all foundation piles" {
         try std.testing.expect(cell == CARD_NONE);
     }
 }
+
+// ============================================================================
+// Hash Tests
+// ============================================================================
+
+test "Board.hash - same board produces same hash" {
+    var deck = makeDeck();
+    var board = Board{};
+    board.init(&deck);
+
+    const hash1 = board.hash();
+    const hash2 = board.hash();
+
+    try std.testing.expect(hash1 == hash2);
+}
+
+test "Board.hash - empty board is consistent" {
+    var board = Board{};
+
+    const hash1 = board.hash();
+    const hash2 = board.hash();
+
+    try std.testing.expect(hash1 == hash2);
+}
+
+test "Board.hash - changing free cells changes hash" {
+    var deck = makeDeck();
+    var board1 = Board{};
+    var board2 = Board{};
+    board1.init(&deck);
+    board2.init(&deck);
+
+    const hash_before = board1.hash();
+
+    // Modify a free cell in board2
+    board2.cells[0] = makeCard(Suit.Hearts, 5);
+    const hash_after = board1.hash();
+    const hash_modified = board2.hash();
+
+    // Hashes should be different
+    try std.testing.expect(hash_after == hash_before); // board1 unchanged
+    try std.testing.expect(hash_modified != hash_after); // board2 changed
+}
+
+test "Board.hash - changing foundation piles changes hash" {
+    var deck = makeDeck();
+    var board1 = Board{};
+    var board2 = Board{};
+    board1.init(&deck);
+    board2.init(&deck);
+
+    const hash_before = board1.hash();
+
+    // Modify foundation piles
+    board2.piles[0] = 5; // Spades pile with 5 cards
+    const hash_modified = board2.hash();
+
+    try std.testing.expect(hash_modified != hash_before);
+}
+
+test "Board.hash - changing tableau cards changes hash" {
+    var deck = makeDeck();
+    var board1 = Board{};
+    var board2 = Board{};
+    board1.init(&deck);
+    board2.init(&deck);
+
+    const hash_before = board1.hash();
+
+    // Modify a card on the tableau
+    if (board2.columns[0][1] > board2.columns[0][0]) {
+        board2.cards[board2.columns[0][0]] = makeCard(Suit.Clubs, 7);
+    }
+    const hash_modified = board2.hash();
+
+    try std.testing.expect(hash_modified != hash_before);
+}
+
+test "Board.hash - identical setup after move sequence" {
+    var deck1 = makeDeck();
+    var deck2 = makeDeck();
+    var board1 = Board{};
+    var board2 = Board{};
+    board1.init(&deck1);
+    board2.init(&deck2);
+
+    // Get hash of initial state
+    const hash_initial = board1.hash();
+
+    // Make a move
+    board1.makeMove(0, 8);
+    const hash_after_move = board1.hash();
+
+    // Hashes should be different after move
+    try std.testing.expect(hash_after_move != hash_initial);
+
+    // Undo the move by moving back
+    board1.makeMove(8, 0);
+    const hash_undo = board1.hash();
+
+    // After undoing, should match initial (if board layout is same)
+    try std.testing.expect(hash_undo == hash_initial);
+}
+
+test "Board.hash - detects card content differences" {
+    var board1 = Board{};
+    var board2 = Board{};
+
+    // Set up two boards with same structure but different cards
+    board1.columns[0] = .{ 0, 7 };
+    board2.columns[0] = .{ 0, 7 };
+
+    // Fill with different cards
+    var i: u8 = 0;
+    while (i < 7) : (i += 1) {
+        board1.cards[i] = makeCard(Suit.Hearts, i + 1);
+        board2.cards[i] = makeCard(Suit.Spades, i + 1);
+    }
+
+    const hash1 = board1.hash();
+    const hash2 = board2.hash();
+
+    try std.testing.expect(hash1 != hash2);
+}
+
+test "Board.hash - all free cells filled changes hash" {
+    var deck = makeDeck();
+    var board1 = Board{};
+    var board2 = Board{};
+    board1.init(&deck);
+    board2.init(&deck);
+
+    const hash_before = board1.hash();
+
+    // Fill all free cells in board2
+    board2.cells[0] = makeCard(Suit.Hearts, 1);
+    board2.cells[1] = makeCard(Suit.Diamonds, 2);
+    board2.cells[2] = makeCard(Suit.Clubs, 3);
+    board2.cells[3] = makeCard(Suit.Spades, 4);
+
+    const hash_filled = board2.hash();
+
+    try std.testing.expect(hash_filled != hash_before);
+    try std.testing.expect(hash_filled != board1.hash());
+}
+
+test "Board.hash - card movement detection" {
+    var deck = makeDeck();
+    var board = Board{};
+    board.init(&deck);
+
+    const hash_initial = board.hash();
+
+    // Save the initial card at column 0
+    const card_col0 = board.cardInSlot(0);
+
+    // Move card to free cell
+    board.makeMove(0, 8);
+    const hash_after_move = board.hash();
+
+    // Verify hashes are different
+    try std.testing.expect(hash_after_move != hash_initial);
+    try std.testing.expect(board.cells[0] == card_col0);
+}
+
+test "Board.hash - reallocate columns preserves hash" {
+    var deck = makeDeck();
+    var board = Board{};
+    board.init(&deck);
+
+    // make a move such that column 0 is full and requires reallocation
+    board.makeMove(6, 0);
+
+    const hash_before = board.hash();
+
+    try std.testing.expect(board.columnIsFull(0));
+    board.reallocateColumns();
+    try std.testing.expect(!board.columnIsFull(0));
+
+    const hash_after = board.hash();
+
+    // Hash should remain the same since card order and state are unchanged
+    try std.testing.expect(hash_before == hash_after);
+}
