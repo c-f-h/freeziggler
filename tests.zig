@@ -806,3 +806,284 @@ test "Board.hash - reallocate columns preserves hash" {
     // Hash should remain the same since card order and state are unchanged
     try std.testing.expect(hash_before == hash_after);
 }
+
+// ============================================================================
+// findValidMoves Tests
+// ============================================================================
+
+test "findValidMoves - empty board" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Empty board should have no valid moves
+    try std.testing.expect(moves.len == 0);
+}
+
+test "findValidMoves - move to empty free cell" {
+    var deck = makeDeck();
+    var board = Board{};
+    board.init(&deck);
+    var buffer: [128][2]u8 = undefined;
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find many moves (to empty free cells)
+    try std.testing.expect(moves.len > 0);
+
+    // Check that at least one move is to a free cell
+    var found_free_cell_move = false;
+    for (moves) |move| {
+        if (move[1] >= 8 and move[1] < 12) {
+            found_free_cell_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_free_cell_move);
+}
+
+test "findValidMoves - move ace to foundation" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: place an ace in a free cell
+    const ace_spades = makeCard(Suit.Spades, 1);
+    board.cells[0] = ace_spades;
+    board.piles[0] = 0; // Spades foundation empty
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should have at least one move from free cell 8 to foundation slot 12
+    var found_ace_move = false;
+    for (moves) |move| {
+        if (move[0] == 8 and move[1] == 12) {
+            found_ace_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_ace_move);
+}
+
+test "findValidMoves - move to foundation with existing cards" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: place ace and 2 in cells, 1 card in foundation
+    board.cells[0] = makeCard(Suit.Hearts, 2);
+    board.cells[1] = makeCard(Suit.Hearts, 3);
+    board.piles[2] = 1; // Hearts foundation has ace (rank 1)
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find move from free cell 8 to hearts foundation 14
+    var found_move = false;
+    for (moves) |move| {
+        if (move[0] == 8 and move[1] == 14) {
+            found_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_move);
+}
+
+test "findValidMoves - alternating colors in columns" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: place red 6 in column 0, black 7 in column 1
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.cards[0] = makeCard(Suit.Hearts, 6); // Red 6
+    board.cards[1] = makeCard(Suit.Spades, 7); // Black 7
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find valid move from column 0 to column 1
+    var found_move = false;
+    for (moves) |move| {
+        if (move[0] == 0 and move[1] == 1) {
+            found_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_move);
+}
+
+test "findValidMoves - invalid same color move" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: place red 6 in column 0, red 7 in column 1 (same color, invalid)
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.cards[0] = makeCard(Suit.Hearts, 6); // Red 6
+    board.cards[1] = makeCard(Suit.Diamonds, 7); // Red 7
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should NOT find move from column 0 to column 1
+    for (moves) |move| {
+        try std.testing.expect(!(move[0] == 0 and move[1] == 1));
+    }
+}
+
+test "findValidMoves - invalid rank sequence move" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: place red 5 in column 0, black 8 in column 1 (wrong rank)
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.cards[0] = makeCard(Suit.Hearts, 5); // Red 5
+    board.cards[1] = makeCard(Suit.Spades, 8); // Black 8
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should NOT find move from column 0 to column 1
+    for (moves) |move| {
+        try std.testing.expect(!(move[0] == 0 and move[1] == 1));
+    }
+}
+
+test "findValidMoves - move to empty column" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: card in column 0, column 1 empty
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 1 }; // Empty column
+    board.cards[0] = makeCard(Suit.Hearts, 5);
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find move from column 0 to empty column 1
+    var found_move = false;
+    for (moves) |move| {
+        if (move[0] == 0 and move[1] == 1) {
+            found_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_move);
+}
+
+test "findValidMoves - multiple valid moves from same card" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: a card that can move to multiple destinations
+    // Free 6 in free cell of column 0, black 7 in column 1, empty column 2
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.columns[2] = .{ 2, 2 }; // Empty
+    board.cells[0] = makeCard(Suit.Hearts, 6); // Free cell
+    board.cards[0] = makeCard(Suit.Hearts, 6); // Column 0 top card
+    board.cards[1] = makeCard(Suit.Spades, 7); // Column 1 top card
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find at least 2 moves from free cell (to column 1 and column 2)
+    var move_count: usize = 0;
+    for (moves) |move| {
+        if (move[0] == 8) { // Free cell
+            move_count += 1;
+        }
+    }
+    try std.testing.expect(move_count >= 2);
+}
+
+test "findValidMoves - no moves from empty slots" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: completely empty board except one card
+    board.columns[0] = .{ 0, 1 };
+    board.cards[0] = makeCard(Suit.Hearts, 5);
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should have some moves (at least to empty slots)
+    // But should not create moves from empty free cells (8-11)
+    for (moves) |move| {
+        // From slots 8-11 should not appear (empty free cells)
+        try std.testing.expect(!(move[0] >= 8 and move[0] < 12));
+    }
+}
+
+test "findValidMoves - returns slice length matches buffer" {
+    var board = Board{};
+    var deck = makeDeck();
+    board.init(&deck);
+    var buffer: [128][2]u8 = undefined;
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Verify slice points to buffer
+    try std.testing.expect(moves.len <= buffer.len);
+}
+
+test "findValidMoves - king to empty column" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: King in one column, empty column
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 1 }; // Empty
+    board.cards[0] = makeCard(Suit.Hearts, 13); // King
+
+    const moves = board.findValidMoves(&buffer);
+
+    // King should be able to move to empty column
+    var found_move = false;
+    for (moves) |move| {
+        if (move[0] == 0 and move[1] == 1) {
+            found_move = true;
+            break;
+        }
+    }
+    try std.testing.expect(found_move);
+}
+
+test "findValidMoves - ace cannot move below king" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: Ace in column 0, King in column 1
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.cards[0] = makeCard(Suit.Hearts, 1); // Red Ace
+    board.cards[1] = makeCard(Suit.Spades, 13); // Black King
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Ace cannot move below King (rank mismatch)
+    for (moves) |move| {
+        try std.testing.expect(!(move[0] == 0 and move[1] == 1));
+    }
+}
+
+test "findValidMoves - sequence of valid descending moves" {
+    var board = Board{};
+    var buffer: [128][2]u8 = undefined;
+
+    // Set up: sequence 5->6->7 with alternating colors
+    board.columns[0] = .{ 0, 1 };
+    board.columns[1] = .{ 1, 2 };
+    board.columns[2] = .{ 2, 3 };
+    board.cards[0] = makeCard(Suit.Hearts, 5); // Red 5
+    board.cards[1] = makeCard(Suit.Spades, 6); // Black 6
+    board.cards[2] = makeCard(Suit.Diamonds, 7); // Red 7
+
+    const moves = board.findValidMoves(&buffer);
+
+    // Should find move from column 0 to column 1
+    var found_move_0_1 = false;
+    var found_move_1_2 = false;
+    for (moves) |move| {
+        if (move[0] == 0 and move[1] == 1) found_move_0_1 = true;
+        if (move[0] == 1 and move[1] == 2) found_move_1_2 = true;
+    }
+    try std.testing.expect(found_move_0_1);
+    try std.testing.expect(found_move_1_2);
+}

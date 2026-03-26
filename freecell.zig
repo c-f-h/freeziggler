@@ -247,37 +247,58 @@ pub const Board = struct {
         }
     }
 
-    pub fn findValidMoves(board: *const Board) void {
-        var i: u8 = 0;
-        while (i < NUM_COLUMNS - 1) : (i += 1) {
-            const card_i = board.cardInSlot(i);
-            if (card_i == CARD_NONE) continue; // Skip empty columns
+    /// Find all valid moves (from any slot to any other slot) as pairs (from, to) of u8
+    /// Takes a buffer of u8 pairs and returns a slice into it containing the move pairs
+    pub fn findValidMoves(board: *const Board, buffer: [][2]u8) [][2]u8 {
+        var count: usize = 0;
 
-            var j: u8 = i + 1;
-            while (j < NUM_COLUMNS) : (j += 1) {
-                const card_j = board.cardInSlot(j);
-                if (card_j == CARD_NONE) continue; // Skip empty columns
+        // Check all source slots (columns 0-7, free cells 8-11)
+        var from: u8 = 0;
+        while (from < NUM_COLUMNS + 4) : (from += 1) {
+            const card = board.cardInSlot(from);
+            if (card == CARD_NONE) continue;
 
-                if (canMoveBelow(card_i, card_j)) {
-                    std.debug.print("Can move from column {d} to column {d}\n", .{ i, j });
-                } else if (canMoveBelow(card_j, card_i)) {
-                    std.debug.print("Can move from column {d} to column {d}\n", .{ j, i });
+            // Check all destination slots (columns, free cells, foundation)
+            var to: u8 = 0;
+            while (to < NUM_COLUMNS + 8) : (to += 1) {
+                if (from == to) continue;
+
+                const target = board.cardInSlot(to);
+                var is_valid = false;
+
+                if (to < NUM_COLUMNS + 4) {
+                    // Destination is column or free cell
+                    if (target == CARD_NONE) {
+                        // Can move to empty slot
+                        is_valid = true;
+                    } else if (to < NUM_COLUMNS and canMoveBelow(card, target)) {
+                        // Can move to column if alternating color and descending rank
+                        is_valid = true;
+                    }
+                } else {
+                    // Destination is foundation pile
+                    const pile_index = to - NUM_COLUMNS - 4;
+                    const card_rank = card & 0b0000_1111;
+                    const card_suit_bits = card & 0b1100_0000;
+
+                    // Can move if the card rank is one more than current pile top and suits match
+                    if (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6))) {
+                        is_valid = true;
+                    }
+                }
+
+                if (is_valid) {
+                    if (count < buffer.len) {
+                        buffer[count] = .{ from, to };
+                        count += 1;
+                    } else {
+                        @panic("findValidMoves: insufficient buffer space");
+                    }
                 }
             }
-
-            //// Check moves to free cells
-            //for (self.cells) |cell| {
-            //    if (cell == CARD_NONE) {
-            //        std.debug.print("Can move {c} to free cell\n", .{card});
-            //    }
-            //}
-            //// Check moves to foundation piles
-            //for (self.piles, 0..) |pile, j| {
-            //    if (canMoveBelow(card, makeCard(@enumFromInt(j << 6), pile + 1))) {
-            //        std.debug.print("Can move {c} to foundation pile {s}\n", .{card, suitString(@enumFromInt(j << 6))});
-            //    }
-            //}
         }
+
+        return buffer[0..count];
     }
 
     /// Returns a hash of the board state for use in hash maps or detecting duplicate positions
@@ -331,5 +352,12 @@ pub fn main() void {
     board.init(&deck);
 
     board.print(); // Example: print the entire board
-    board.findValidMoves(); // Example: find and print valid moves
+
+    var move_buffer: [128][2]u8 = undefined;
+    const moves = board.findValidMoves(&move_buffer);
+
+    std.debug.print("\nFound {d} valid moves:\n", .{moves.len});
+    for (moves) |move| {
+        std.debug.print("  From slot {d} to slot {d}\n", .{ move[0], move[1] });
+    }
 }
