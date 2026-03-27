@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const verbose = false;
+
 pub const Card = u8;
 pub const CARD_NONE: Card = 0; // Represents no card or an empty slot
 
@@ -509,7 +511,8 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
 
         // Check if we've already won
         if (isWon(board)) {
-            std.debug.print("Found winning board at iteration {d}!\n", .{num_iter});
+            if (verbose)
+                std.debug.print("Found winning board at iteration {d}!\n", .{num_iter});
             solution_hash = cur_hash;
             break;
         }
@@ -533,7 +536,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
         const valid_moves = board.findValidMoves(&move_buffer, false);
 
         num_iter += 1;
-        if (num_iter % 100000 == 0) {
+        if (verbose and num_iter % 100000 == 0) {
             std.debug.print("Iteration {d}, queue length {d}, {d} hashes, found {d} valid moves:\n", .{ num_iter, pqueue.count(), visited.count(), valid_moves.len });
             board.print();
             printMoves(valid_moves);
@@ -587,13 +590,13 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
 /// Modifies path to contain the solution moves if found
 /// Returns true if a solution is found
 /// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
-pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !bool {
+pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     var board = initial_board;
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
     //return solve(&board, &visited, path);
-    return solveAStar(&board, &visited, allocator, path);
+    return .{ try solveAStar(&board, &visited, allocator, path), visited.count() };
 }
 
 /// Create a solved board state (all 52 cards in foundation piles, no cards on tableau)
@@ -619,50 +622,65 @@ fn printMoves(moves: [][2]u8) void {
     }
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    var i: u32 = 0;
-    while (i < 1000) : (i += 1) {
-        const board = createRandomBoard(i);
+    var stdout_buf: [256]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buf);
+    const stdout = &stdout_writer.interface;
 
-        std.debug.print("Initial board state:\n", .{});
-        board.print();
+    const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-        // Now try to solve it
-        std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
+    var seed: u32 = 0;
+    while (seed < 16) : (seed += 1) {
+        const board = createRandomBoard(seed);
+
+        if (verbose) {
+            std.debug.print("Initial board state (seed {d}):\n", .{seed});
+            board.print();
+
+            // Now try to solve it
+            std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
+        }
 
         var solution_path: Path = .{};
-        const found = try solveFreeCell(board, allocator, &solution_path);
+        const found, const iters = try solveFreeCell(board, allocator, &solution_path);
 
-        std.debug.print("Solver completed. Found solution: {}. Path length: {d}\n", .{ found, solution_path.count });
+        if (verbose) {
+            std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, solution_path.count, iters });
 
-        if (found) {
-            std.debug.print("SUCCESS! Puzzle solved!\n", .{});
+            if (found) {
+                // Show first 20 moves of solution
+                std.debug.print("SUCCESS! Puzzle solved!\n", .{});
 
-            // Show first 20 moves of solution
-            //std.debug.print("\nFirst 20 moves of solution:\n", .{});
-            //for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
-            //    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
-            //}
-            //if (solution_path.count > 20) {
-            //    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
-            //}
-            //
-            ////// Verify solution
-            //var verify_board = board;
-            //for (solution_path.items()) |move| {
-            //    verify_board.makeMove(move.from, move.to);
-            //}
-            //std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
+                std.debug.print("\nFirst 20 moves of solution:\n", .{});
+                for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
+                    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
+                }
+                if (solution_path.count > 20) {
+                    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
+                }
+
+                // Verify solution
+                var verify_board = board;
+                for (solution_path.items()) |move| {
+                    verify_board.makeMove(move.from, move.to);
+                }
+                std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
+            } else {
+                std.debug.print("FAIL! Could not solve puzzle.\n", .{});
+                std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
+                break;
+            }
         } else {
-            std.debug.print("FAIL! Could not solve puzzle.\n", .{});
-            std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
-            break;
+            try stdout.print(" {d:04}: {} {d:>5} {d:>7}\n", .{ seed, found, solution_path.count, iters });
         }
 
         _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
     }
+    const time_end = std.Io.Clock.now(std.Io.Clock.real, init.io);
+    try stdout.print("Total time: {} ms\n", .{@as(f64, @floatFromInt(time_end.toMicroseconds() - time_start.toMicroseconds())) / 1000.0});
+    try stdout.flush();
 }
