@@ -501,11 +501,29 @@ fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path) bool 
     return false;
 }
 
-const BoardNode = struct { board: Board, num_moves: u8, estimated_distance: u8 };
+const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u32 };
+
+fn heuristic(board: *const Board) u32 {
+    // Count cards blocked under other cards in columns
+    var blocked: u32 = 0;
+    for (board.columns) |col| {
+        // All but the top card in each column are blocked
+        const num_in_col = col[1] - col[0];
+        if (num_in_col > 1) {
+            blocked += num_in_col - 1;
+        }
+    }
+
+    // Remaining cards on tableau are a baseline
+    const remaining = board.numRemainingCards();
+
+    // Blocked cards have higher penalty since they're harder to move
+    return remaining + (blocked * 2);
+}
 
 fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
-    const a_priority = a.num_moves + a.estimated_distance;
-    const b_priority = b.num_moves + b.estimated_distance;
+    const a_priority = @as(u32, a.num_moves) + a.heuristic_value;
+    const b_priority = @as(u32, b.num_moves) + b.heuristic_value;
     if (a_priority > b_priority) {
         return std.math.Order.gt;
     } else if (a_priority < b_priority) {
@@ -518,28 +536,39 @@ fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
 fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator) !bool {
     var pqueue = std.PriorityQueue(BoardNode, void, bpCompare).initContext({});
 
-    try pqueue.push(allocator, BoardNode{ .board = starting_board.*, .num_moves = 0, .estimated_distance = starting_board.numRemainingCards() });
+    // Store boards in a map keyed by their hash to avoid storing full boards in queue nodes
+    var open_set = std.AutoHashMap(u64, Board).init(allocator);
+    defer open_set.deinit();
+
+    const start_hash = starting_board.hash();
+    try pqueue.push(allocator, BoardNode{ .board_hash = start_hash, .num_moves = 0, .heuristic_value = heuristic(starting_board) });
+    try open_set.put(start_hash, starting_board.*);
 
     var move_buffer: [128][2]u8 = undefined;
 
     var num_iter: u32 = 0;
 
     while (pqueue.pop()) |cur_node| {
-        var board = &cur_node.board;
+        // Look up the board from the open_set
+        const board_entry = open_set.get(cur_node.board_hash);
+        if (board_entry == null) {
+            continue; // Board not found
+        }
+        var board = board_entry.?;
+
         // Check if we've already won
-        if (isWon(board)) {
+        if (isWon(&board)) {
             std.debug.print("Found winning board at iteration {d}!\n", .{num_iter});
             return true;
         }
 
         // Check if we've visited this state before
-        const state_hash = board.hash();
-        if (visited.contains(state_hash)) {
+        if (visited.contains(cur_node.board_hash)) {
             continue;
         }
 
         // Mark current state as visited
-        try visited.put(state_hash, {});
+        try visited.put(cur_node.board_hash, {});
 
         // Generate all valid moves from this position
         const valid_moves = board.findValidMoves(&move_buffer, false);
@@ -552,9 +581,15 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
         }
 
         for (valid_moves) |move_pair| {
-            var new_board = board.*;
+            var new_board = board;
             new_board.makeMove(move_pair[0], move_pair[1]);
-            try pqueue.push(allocator, BoardNode{ .board = new_board, .num_moves = cur_node.num_moves + 1, .estimated_distance = new_board.numRemainingCards() });
+
+            // Check if this new state was already visited BEFORE adding to queue
+            const new_hash = new_board.hash();
+            if (!visited.contains(new_hash)) {
+                try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = cur_node.num_moves + 1, .heuristic_value = heuristic(&new_board) });
+                try open_set.put(new_hash, new_board);
+            }
         }
     }
     return false;
