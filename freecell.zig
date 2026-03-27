@@ -4,6 +4,8 @@ const verbose = false;
 
 const KEEP_FREECELLS_SORTED = false; // If true, keeps free cells sorted by card value to deduplicate equivalent states
 
+const heuristic = heuristic_numNonMatching;
+
 var num_reallocations: u64 = 0;
 
 pub const Card = u8;
@@ -457,7 +459,9 @@ pub fn isWon(board: *const Board) bool {
 
 const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u32 };
 
-fn heuristic(board: *const Board) u32 {
+const heuristic_naive = Board.numRemainingCards;
+
+fn heuristic_numBlocked(board: *const Board) u32 {
     // Count cards blocked under other cards in columns
     var blocked: u32 = 0;
     for (board.columns) |col| {
@@ -468,11 +472,23 @@ fn heuristic(board: *const Board) u32 {
         }
     }
 
-    // Remaining cards on tableau are a baseline
-    const remaining = board.numRemainingCards();
-
     // Blocked cards have higher penalty since they're harder to move
-    return remaining + (blocked * 2);
+    return board.numRemainingCards() + 2 * blocked;
+}
+
+fn heuristic_numNonMatching(board: *const Board) u32 {
+    // Count cards that are not yet in the foundation piles and are not Aces (i.e., not yet "free")
+    var count: u32 = 0;
+    for (board.columns) |col| {
+        const num_in_col = col[1] - col[0];
+        if (num_in_col > 1) {
+            for (col[0]..col[1] - 1) |idx| {
+                if (!canMoveBelow(board.cards[idx + 1], board.cards[idx]))
+                    count += 1;
+            }
+        }
+    }
+    return heuristic_numBlocked(board) + 1 * count;
 }
 
 fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
@@ -642,10 +658,10 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 0;
+    var seed: u32 = 16;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
-    while (seed < 16) : (seed += 1) {
+    while (seed < 17) : (seed += 1) {
         const board = createRandomBoard(seed);
 
         if (verbose) {
@@ -689,6 +705,7 @@ pub fn main(init: std.process.Init) !void {
             }
         } else {
             try stdout.print(" {d:04}: {} {d:>5} {d:>7}\n", .{ seed, found, solution_path.count, iters });
+            try stdout.flush();
         }
 
         _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
