@@ -197,6 +197,8 @@ pub const Board = struct {
         } else if (slot < NUM_COLUMNS + 4) {
             // Putting into a free cell
             board.cells[slot - NUM_COLUMNS] = card;
+            //std.mem.sort(u8, &board.cells, {}, comptime std.sort.asc(u8)); // Keep free cells sorted for easier move generation
+            //std.debug.print("Placed card {d} in free cell slot {d}, sorted free cells: {any}", .{ card, slot - NUM_COLUMNS, &board.cells });
         } else if (slot < NUM_COLUMNS + 8) {
             // Putting into a foundation pile
             const pileIndex = slot - NUM_COLUMNS - 4;
@@ -261,20 +263,31 @@ pub const Board = struct {
 
             // Check all destination slots (columns, free cells, foundation)
             var to: u8 = 0;
+            // For free cells and free columns, generate only one move to avoid duplicates
+            var free_cell_move_generated = false;
+            var free_column_move_generated = false;
+
             while (to < NUM_COLUMNS + 8) : (to += 1) {
                 if (from == to) continue;
 
                 const target = board.cardInSlot(to);
                 var is_valid = false;
 
-                if (to < NUM_COLUMNS + 4) {
-                    // Destination is column or free cell
-                    if (target == CARD_NONE) {
-                        // Can move to empty slot
-                        is_valid = true;
-                    } else if (to < NUM_COLUMNS and canMoveBelow(card, target)) {
+                if (to < NUM_COLUMNS) {
+                    // Destination is column
+                    if ((target == CARD_NONE and !free_column_move_generated) or (target != CARD_NONE and canMoveBelow(card, target))) {
                         // Can move to column if alternating color and descending rank
                         is_valid = true;
+                        if (target == CARD_NONE) {
+                            free_column_move_generated = true;
+                        }
+                    }
+                } else if (to < NUM_COLUMNS + 4) {
+                    // Destination is free cell
+                    if (target == CARD_NONE and !free_cell_move_generated) {
+                        // Can move to free cell if it's empty
+                        is_valid = true;
+                        free_cell_move_generated = true;
                     }
                 } else {
                     // Destination is foundation pile
@@ -438,9 +451,10 @@ fn isFoundationMove(move_pair: [2]u8) bool {
 /// Prioritizes foundation moves to guide search toward solution
 /// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
 /// Modifies the path and board state during search; restores board on backtrack
-fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path, allow_foundation_moves: bool) bool {
+fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path) bool {
     // Base case 1: Check if we've already won
     if (isWon(board)) {
+        std.debug.print("Found winning board at depth {d}!\n", .{path.count});
         return true;
     }
 
@@ -451,49 +465,32 @@ fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path, allow
     }
 
     // Mark current state as visited
-    visited.put(state_hash, {}) catch return false;
+    visited.put(state_hash, {}) catch {
+        @panic("hashmap out of memory");
+    };
 
     // Generate all valid moves from this position
     var move_buffer: [128][2]u8 = undefined;
-    const valid_moves = board.findValidMoves(&move_buffer, allow_foundation_moves);
+    const valid_moves = board.findValidMoves(&move_buffer, false);
 
-    // Try foundation moves first (prioritization)
+    std.debug.print("At depth {d}, found {d} valid moves\n", .{ path.count, valid_moves.len });
+
     for (valid_moves) |move_pair| {
-        if (!isFoundationMove(move_pair)) continue;
-
         const move = Move{ .from = move_pair[0], .to = move_pair[1] };
 
         // Apply the move
         board.makeMove(move.from, move.to);
-        if (!path.append(move)) return false; // Path is full
+        //if (!path.append(move)) return false; // Path is full
+        path.count += 1; // Increment path count without storing move to save memory
 
         // Recursively try to solve from this position
-        if (solve(board, visited, path, allow_foundation_moves)) {
+        if (solve(board, visited, path)) {
             return true;
         }
 
         // Backtrack: undo the move
-        _ = path.pop();
-        undoMove(board, move);
-    }
-
-    // Then try non-foundation moves
-    for (valid_moves) |move_pair| {
-        if (isFoundationMove(move_pair)) continue;
-
-        const move = Move{ .from = move_pair[0], .to = move_pair[1] };
-
-        // Apply the move
-        board.makeMove(move.from, move.to);
-        if (!path.append(move)) return false; // Path is full
-
-        // Recursively try to solve from this position
-        if (solve(board, visited, path, allow_foundation_moves)) {
-            return true;
-        }
-
-        // Backtrack: undo the move
-        _ = path.pop();
+        //_ = path.pop();
+        path.count -= 1; // Decrement path count without storing move
         undoMove(board, move);
     }
 
@@ -504,12 +501,12 @@ fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path, allow
 /// Modifies path to contain the solution moves if found
 /// Returns true if a solution is found
 /// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
-pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path, allow_foundation_moves: bool) !bool {
+pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !bool {
     var board = initial_board;
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
-    return solve(&board, &visited, path, allow_foundation_moves);
+    return solve(&board, &visited, path);
 }
 
 /// Create a solved board state (all 52 cards in foundation piles, no cards on tableau)
@@ -518,6 +515,15 @@ pub fn createSolvedBoard() Board {
         .piles = .{ 13, 13, 13, 13 },
         .columns = .{ .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 }, .{ 0, 0 } },
     };
+}
+
+pub fn createRandomBoard(seed: u64) Board {
+    var rng = std.Random.DefaultPrng.init(seed);
+    var deck = makeDeck();
+    std.Random.shuffle(rng.random(), u8, &deck);
+    var board = Board{};
+    board.init(&deck);
+    return board;
 }
 
 /// Create a shuffled board by making random moves from foundation to columns
@@ -558,6 +564,7 @@ pub fn createShuffledBoard(num_moves: u16, seed: u64) Board {
     for (board.columns) |col| {
         std.Random.shuffle(rng.random(), u8, board.cards[col[0]..col[1]]);
     }
+    std.debug.print("Created semi-shuffled board after {d} random moves...\n\n", .{num_moves});
 
     return board;
 }
@@ -573,49 +580,46 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const random_move_count: u16 = 35;
-    const puzzle_board = createShuffledBoard(random_move_count, 999);
+    const random_move_count: u16 = 30;
+    const board = createShuffledBoard(random_move_count, 1);
+    //const board = createRandomBoard(1);
+
+    std.debug.print("Initial board state:\n", .{});
+    board.print();
+
     var move_buffer: [128][2]u8 = undefined;
-
-    std.debug.print("Puzzle board state after randomization:\n", .{});
-    puzzle_board.print();
-
-    std.debug.print("\nTesting move generation...", .{});
-    const test_moves = puzzle_board.findValidMoves(&move_buffer, false);
+    const test_moves = board.findValidMoves(&move_buffer, false);
     std.debug.print(" {d} valid moves available\n\n", .{test_moves.len});
     printMoves(test_moves);
 
     // Now try to solve it
     std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
-    std.debug.print("Starting solver from board after {d} random moves...\n\n", .{random_move_count});
 
     var solution_path: Path = .{};
-    const found = try solveFreeCell(puzzle_board, allocator, &solution_path, false);
+    const found = try solveFreeCell(board, allocator, &solution_path);
 
-    std.debug.print("Solver completed. Found solution: {}\n", .{found});
-    std.debug.print("Solution path length: {d}\n\n", .{solution_path.count});
+    std.debug.print("Solver completed. Found solution: {}. Path length: {d}\n", .{ found, solution_path.count });
 
     if (found) {
-        std.debug.print("✓ SUCCESS! Puzzle solved!\n", .{});
-        std.debug.print("Generated {d} random moves → Solver recovered with {d} solution moves\n", .{ random_move_count, solution_path.count });
+        std.debug.print("SUCCESS! Puzzle solved!\n", .{});
 
         // Show first 20 moves of solution
-        std.debug.print("\nFirst 20 moves of solution:\n", .{});
-        for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
-            std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
-        }
-        if (solution_path.count > 20) {
-            std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
-        }
+        //std.debug.print("\nFirst 20 moves of solution:\n", .{});
+        //for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
+        //    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
+        //}
+        //if (solution_path.count > 20) {
+        //    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
+        //}
 
         // Verify solution
-        var verify_board = puzzle_board;
+        var verify_board = board;
         for (solution_path.items()) |move| {
             verify_board.makeMove(move.from, move.to);
         }
         std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
     } else {
-        std.debug.print("✗ Could not solve puzzle after {d} random moves.\n", .{random_move_count});
-        std.debug.print("Foundation piles: {} {} {} {}\n", .{ puzzle_board.piles[0], puzzle_board.piles[1], puzzle_board.piles[2], puzzle_board.piles[3] });
+        std.debug.print("FAIL! Could not solve puzzle.\n", .{});
+        std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
     }
 }
