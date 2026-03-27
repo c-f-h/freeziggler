@@ -444,63 +444,6 @@ pub fn undoMove(board: *Board, move: Move) void {
     }
 }
 
-/// Check if a move targets a foundation pile
-fn isFoundationMove(move_pair: [2]u8) bool {
-    // Slots 12-15 are foundation piles
-    return move_pair[1] >= NUM_COLUMNS + 4;
-}
-
-/// Core DFS solver: tries to find a sequence of moves to win from current board state
-/// Returns true if a solution is found (path will contain the moves)
-/// Prioritizes foundation moves to guide search toward solution
-/// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
-/// Modifies the path and board state during search; restores board on backtrack
-fn solve(board: *Board, visited: *std.AutoHashMap(u64, void), path: *Path) bool {
-    // Base case 1: Check if we've already won
-    if (isWon(board)) {
-        std.debug.print("Found winning board at depth {d}!\n", .{path.count});
-        return true;
-    }
-
-    // Base case 2: Check if we've visited this state before
-    const state_hash = board.hash();
-    if (visited.contains(state_hash)) {
-        return false;
-    }
-
-    // Mark current state as visited
-    visited.put(state_hash, {}) catch {
-        @panic("hashmap out of memory");
-    };
-
-    // Generate all valid moves from this position
-    var move_buffer: [128][2]u8 = undefined;
-    const valid_moves = board.findValidMoves(&move_buffer, false);
-
-    std.debug.print("At depth {d}, found {d} valid moves\n", .{ path.count, valid_moves.len });
-
-    for (valid_moves) |move_pair| {
-        const move = Move{ .from = move_pair[0], .to = move_pair[1] };
-
-        // Apply the move
-        board.makeMove(move.from, move.to);
-        //if (!path.append(move)) return false; // Path is full
-        path.count += 1; // Increment path count without storing move to save memory
-
-        // Recursively try to solve from this position
-        if (solve(board, visited, path)) {
-            return true;
-        }
-
-        // Backtrack: undo the move
-        //_ = path.pop();
-        path.count -= 1; // Decrement path count without storing move
-        undoMove(board, move);
-    }
-
-    return false;
-}
-
 const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u32 };
 
 fn heuristic(board: *const Board) u32 {
@@ -533,42 +476,58 @@ fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
     }
 }
 
-fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator) !bool {
+fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
     var pqueue = std.PriorityQueue(BoardNode, void, bpCompare).initContext({});
 
     // Store boards in a map keyed by their hash to avoid storing full boards in queue nodes
     var open_set = std.AutoHashMap(u64, Board).init(allocator);
     defer open_set.deinit();
 
+    // Track best known distance to each state
+    var best_cost = std.AutoHashMap(u64, u16).init(allocator);
+    defer best_cost.deinit();
+
+    // Track parent hash and move for path reconstruction
+    const PathNode = struct { parent_hash: u64, move: Move };
+    var parent_map = std.AutoHashMap(u64, PathNode).init(allocator);
+    defer parent_map.deinit();
+
     const start_hash = starting_board.hash();
     try pqueue.push(allocator, BoardNode{ .board_hash = start_hash, .num_moves = 0, .heuristic_value = heuristic(starting_board) });
     try open_set.put(start_hash, starting_board.*);
+    try best_cost.put(start_hash, 0);
 
     var move_buffer: [128][2]u8 = undefined;
 
     var num_iter: u32 = 0;
+    var solution_hash: u64 = 0;
 
     while (pqueue.pop()) |cur_node| {
         // Look up the board from the open_set
-        const board_entry = open_set.get(cur_node.board_hash);
-        if (board_entry == null) {
-            continue; // Board not found
-        }
-        var board = board_entry.?;
+        const cur_hash = cur_node.board_hash;
+        const board = &open_set.get(cur_hash).?;
 
         // Check if we've already won
-        if (isWon(&board)) {
+        if (isWon(board)) {
             std.debug.print("Found winning board at iteration {d}!\n", .{num_iter});
-            return true;
+            solution_hash = cur_hash;
+            break;
         }
 
         // Check if we've visited this state before
-        if (visited.contains(cur_node.board_hash)) {
+        if (visited.contains(cur_hash)) {
             continue;
         }
 
+        // Check if this is an outdated entry (we found a better path since adding it)
+        if (best_cost.get(cur_hash)) |known_cost| {
+            if (cur_node.num_moves > known_cost) {
+                continue; // Skip this outdated entry
+            }
+        }
+
         // Mark current state as visited
-        try visited.put(cur_node.board_hash, {});
+        try visited.put(cur_hash, {});
 
         // Generate all valid moves from this position
         const valid_moves = board.findValidMoves(&move_buffer, false);
@@ -581,17 +540,46 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
         }
 
         for (valid_moves) |move_pair| {
-            var new_board = board;
+            var new_board = board.*;
             new_board.makeMove(move_pair[0], move_pair[1]);
 
-            // Check if this new state was already visited BEFORE adding to queue
             const new_hash = new_board.hash();
-            if (!visited.contains(new_hash)) {
-                try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = cur_node.num_moves + 1, .heuristic_value = heuristic(&new_board) });
+            const new_cost = cur_node.num_moves + 1;
+            const move = Move{ .from = move_pair[0], .to = move_pair[1] };
+
+            // Only add to queue if we found a better path (or haven't seen this state)
+            if (best_cost.get(new_hash)) |known_cost| {
+                if (new_cost < known_cost) {
+                    // Have found this state as a neighbor before, but found a shorter path - update it
+                    try best_cost.put(new_hash, new_cost);
+                    try parent_map.put(new_hash, PathNode{ .parent_hash = cur_node.board_hash, .move = move });
+                    try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = new_cost, .heuristic_value = heuristic(&new_board) });
+                }
+            } else if (!visited.contains(new_hash)) {
+                // Haven't seen this state yet
+                try best_cost.put(new_hash, new_cost);
                 try open_set.put(new_hash, new_board);
+                try parent_map.put(new_hash, PathNode{ .parent_hash = cur_node.board_hash, .move = move });
+                try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = new_cost, .heuristic_value = heuristic(&new_board) });
             }
         }
     }
+
+    // Reconstruct path by tracing back through parent pointers
+    if (solution_hash != 0) {
+        var current_hash = solution_hash;
+        while (parent_map.get(current_hash)) |path_node| {
+            // Prepend move to path (building backwards)
+            for (0..path.count) |i| {
+                path.moves[path.count - i] = path.moves[path.count - i - 1];
+            }
+            path.moves[0] = path_node.move;
+            path.count += 1;
+            current_hash = path_node.parent_hash;
+        }
+        return true;
+    }
+
     return false;
 }
 
@@ -605,8 +593,7 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
     defer visited.deinit();
 
     //return solve(&board, &visited, path);
-    _ = path; // Unused in BFS version
-    return solveAStar(&board, &visited, allocator);
+    return solveAStar(&board, &visited, allocator, path);
 }
 
 /// Create a solved board state (all 52 cards in foundation piles, no cards on tableau)
@@ -626,49 +613,6 @@ pub fn createRandomBoard(seed: u64) Board {
     return board;
 }
 
-/// Create a shuffled board by making random moves from foundation to columns
-pub fn createShuffledBoard(num_moves: u16, seed: u64) Board {
-    // Start with a solved board (all cards in foundation)
-    var board = createSolvedBoard();
-    var rng = std.Random.DefaultPrng.init(seed);
-
-    for (0..num_moves) |i| {
-        // Pick a random foundation pile that has cards
-        var foundation_index: u8 = undefined;
-        var found_with_cards = false;
-
-        // Try up to 4 times to find a foundation with cards
-        for (0..4) |_| {
-            foundation_index = @intCast(rng.random().uintLessThan(u8, 4));
-            if (board.piles[foundation_index] > 0) {
-                found_with_cards = true;
-                break;
-            }
-        }
-
-        if (!found_with_cards) {
-            std.debug.print("  No foundation piles have cards at iteration {d}\n", .{i});
-            break;
-        }
-
-        // Pick a random column destination
-        const column_dest = rng.random().uintLessThan(u8, NUM_COLUMNS);
-
-        // The foundation slot is NUM_COLUMNS + 4 + foundation_index
-        const foundation_slot: u8 = NUM_COLUMNS + 4 + foundation_index;
-
-        // Apply the move without validity check
-        board.makeMove(foundation_slot, column_dest);
-    }
-
-    for (board.columns) |col| {
-        std.Random.shuffle(rng.random(), u8, board.cards[col[0]..col[1]]);
-    }
-    std.debug.print("Created semi-shuffled board after {d} random moves...\n\n", .{num_moves});
-
-    return board;
-}
-
 fn printMoves(moves: [][2]u8) void {
     for (moves) |move_pair| {
         std.debug.print("  slot {d} -> slot {d}\n", .{ move_pair[0], move_pair[1] });
@@ -680,46 +624,45 @@ pub fn main() !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    //const random_move_count: u16 = 40;
-    //const board = createShuffledBoard(random_move_count, 1);
-    const board = createRandomBoard(3);
+    var i: u32 = 0;
+    while (i < 1000) : (i += 1) {
+        const board = createRandomBoard(i);
 
-    std.debug.print("Initial board state:\n", .{});
-    board.print();
+        std.debug.print("Initial board state:\n", .{});
+        board.print();
 
-    var move_buffer: [128][2]u8 = undefined;
-    const test_moves = board.findValidMoves(&move_buffer, false);
-    std.debug.print(" {d} valid moves available\n\n", .{test_moves.len});
-    printMoves(test_moves);
+        // Now try to solve it
+        std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
 
-    // Now try to solve it
-    std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
+        var solution_path: Path = .{};
+        const found = try solveFreeCell(board, allocator, &solution_path);
 
-    var solution_path: Path = .{};
-    const found = try solveFreeCell(board, allocator, &solution_path);
+        std.debug.print("Solver completed. Found solution: {}. Path length: {d}\n", .{ found, solution_path.count });
 
-    std.debug.print("Solver completed. Found solution: {}. Path length: {d}\n", .{ found, solution_path.count });
+        if (found) {
+            std.debug.print("SUCCESS! Puzzle solved!\n", .{});
 
-    if (found) {
-        std.debug.print("SUCCESS! Puzzle solved!\n", .{});
+            // Show first 20 moves of solution
+            //std.debug.print("\nFirst 20 moves of solution:\n", .{});
+            //for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
+            //    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
+            //}
+            //if (solution_path.count > 20) {
+            //    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
+            //}
+            //
+            ////// Verify solution
+            //var verify_board = board;
+            //for (solution_path.items()) |move| {
+            //    verify_board.makeMove(move.from, move.to);
+            //}
+            //std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
+        } else {
+            std.debug.print("FAIL! Could not solve puzzle.\n", .{});
+            std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
+            break;
+        }
 
-        // Show first 20 moves of solution
-        //std.debug.print("\nFirst 20 moves of solution:\n", .{});
-        //for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
-        //    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
-        //}
-        //if (solution_path.count > 20) {
-        //    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
-        //}
-
-        //// Verify solution
-        //var verify_board = board;
-        //for (solution_path.items()) |move| {
-        //    verify_board.makeMove(move.from, move.to);
-        //}
-        //std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
-    } else {
-        std.debug.print("FAIL! Could not solve puzzle.\n", .{});
-        std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
+        _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
     }
 }
