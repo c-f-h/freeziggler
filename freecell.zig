@@ -2,6 +2,8 @@ const std = @import("std");
 
 const verbose = false;
 
+const KEEP_FREECELLS_SORTED = false; // If true, keeps free cells sorted by card value to deduplicate equivalent states
+
 pub const Card = u8;
 pub const CARD_NONE: Card = 0; // Represents no card or an empty slot
 
@@ -69,6 +71,20 @@ fn printCard(card: Card) void {
     const suit: Suit = @enumFromInt(card & 0b1100_0000); // upper 2 bits for suit
 
     std.debug.print("{s}{c}", .{ suitString(suit), rankName(rank) });
+}
+
+pub fn bubbleIntoPlace(arr: *[4]u8, index: u8) void {
+    var i = index;
+    while (i > 0 and arr[i - 1] > arr[i]) : (i -= 1) {
+        const temp = arr[i - 1];
+        arr[i - 1] = arr[i];
+        arr[i] = temp;
+    }
+    while (i < 3 and arr[i + 1] < arr[i]) : (i += 1) {
+        const temp = arr[i + 1];
+        arr[i + 1] = arr[i];
+        arr[i] = temp;
+    }
 }
 
 var str_buffer: [8]u8 = undefined; // Temporary buffer for card name
@@ -182,6 +198,8 @@ pub const Board = struct {
         } else if (slot < NUM_COLUMNS + 4) {
             // Taking from a free cell
             board.cells[slot - NUM_COLUMNS] = CARD_NONE;
+            if (KEEP_FREECELLS_SORTED)
+                bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
         } else if (slot < NUM_COLUMNS + 8) {
             // Taking from a foundation pile
             const pileIndex = slot - NUM_COLUMNS - 4;
@@ -203,8 +221,8 @@ pub const Board = struct {
         } else if (slot < NUM_COLUMNS + 4) {
             // Putting into a free cell
             board.cells[slot - NUM_COLUMNS] = card;
-            //std.mem.sort(u8, &board.cells, {}, comptime std.sort.asc(u8)); // Keep free cells sorted for easier move generation
-            //std.debug.print("Placed card {d} in free cell slot {d}, sorted free cells: {any}", .{ card, slot - NUM_COLUMNS, &board.cells });
+            if (KEEP_FREECELLS_SORTED)
+                bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
         } else if (slot < NUM_COLUMNS + 8) {
             // Putting into a foundation pile
             const pileIndex = slot - NUM_COLUMNS - 4;
@@ -214,7 +232,7 @@ pub const Board = struct {
 
     pub fn makeMove(board: *Board, from: u8, to: u8) void {
         const card = board.takeCardFromSlot(from);
-        if (card == CARD_NONE) return; // No card to move
+        if (card == CARD_NONE) @panic("invalid move"); // No card to move
         board.putCardInSlot(to, card);
     }
 
@@ -438,14 +456,6 @@ pub fn isWon(board: *const Board) bool {
     return board.piles[0] == 13 and board.piles[1] == 13 and board.piles[2] == 13 and board.piles[3] == 13;
 }
 
-/// Undo a move by taking a card from destination and putting it back at source
-pub fn undoMove(board: *Board, move: Move) void {
-    const card = board.takeCardFromSlot(move.to);
-    if (card != CARD_NONE) {
-        board.putCardInSlot(move.from, card);
-    }
-}
-
 const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u32 };
 
 fn heuristic(board: *const Board) u32 {
@@ -634,6 +644,8 @@ pub fn main(init: std.process.Init) !void {
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
     var seed: u32 = 0;
+    var total_length: u64 = 0;
+    var total_iters: u64 = 0;
     while (seed < 16) : (seed += 1) {
         const board = createRandomBoard(seed);
 
@@ -647,6 +659,8 @@ pub fn main(init: std.process.Init) !void {
 
         var solution_path: Path = .{};
         const found, const iters = try solveFreeCell(board, allocator, &solution_path);
+        total_length += solution_path.count;
+        total_iters += iters;
 
         if (verbose) {
             std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, solution_path.count, iters });
@@ -681,6 +695,7 @@ pub fn main(init: std.process.Init) !void {
         _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
     }
     const time_end = std.Io.Clock.now(std.Io.Clock.real, init.io);
+    try stdout.print("Total path length: {}, total iterations: {}\n", .{ total_length, total_iters });
     try stdout.print("Total time: {} ms\n", .{@as(f64, @floatFromInt(time_end.toMicroseconds() - time_start.toMicroseconds())) / 1000.0});
     try stdout.flush();
 }
