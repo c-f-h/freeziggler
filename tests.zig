@@ -96,30 +96,24 @@ test "canMoveBelow - with Ace and King" {
 
 test "Board.init - distributes cards correctly" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // First 4 columns should have 7 cards each (4 * 7 = 28)
-    var total_first_four: u8 = 0;
     for (board.columns[0..4]) |col| {
-        total_first_four += col[1] - col[0];
+        try std.testing.expect(col[1] - col[0] == 7);
     }
 
     // Last 4 columns should have 6 cards each (4 * 6 = 24)
-    var total_last_four: u8 = 0;
     for (board.columns[4..8]) |col| {
-        total_last_four += col[1] - col[0];
+        try std.testing.expect(col[1] - col[0] == 6);
     }
 
-    try std.testing.expect(total_first_four == 28);
-    try std.testing.expect(total_last_four == 24);
     try std.testing.expect(board.numCardsOnTableau() == 52);
 }
 
 test "Board.numCardsInColumn" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Column 0-3 should have 7 cards
     try std.testing.expect(board.numCardsInColumn(0) == 7);
@@ -136,16 +130,14 @@ test "Board.numCardsInColumn" {
 
 test "Board.numCardsOnTableau" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     try std.testing.expect(board.numCardsOnTableau() == 52);
 }
 
 test "Board.cardInSlot - columns" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Get top card of first column (slot 0)
     const card_col0 = board.cardInSlot(0);
@@ -158,8 +150,7 @@ test "Board.cardInSlot - columns" {
 
 test "Board.cardInSlot - free cells (empty)" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Free cells are initially empty (slots 8-11)
     try std.testing.expect(board.cardInSlot(8) == CARD_NONE);
@@ -170,8 +161,7 @@ test "Board.cardInSlot - free cells (empty)" {
 
 test "Board.cardInSlot - foundation piles (empty)" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Foundation piles are initially empty (slots 12-15)
     try std.testing.expect(board.cardInSlot(12) == CARD_NONE);
@@ -182,8 +172,7 @@ test "Board.cardInSlot - foundation piles (empty)" {
 
 test "Board.cardInSlot - free cells (with cards)" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const test_card = makeCard(Suit.Hearts, 5);
     board.cells[0] = test_card;
@@ -193,8 +182,7 @@ test "Board.cardInSlot - free cells (with cards)" {
 
 test "Board.cardInSlot - foundation piles (with cards)" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     board.piles[2] = 3; // Hearts pile with 3 cards
 
@@ -206,18 +194,17 @@ test "Board.cardInSlot - foundation piles (with cards)" {
 
 test "Board.columnIsFull - new board" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
+    board.reallocateColumns();
 
-    // Columns are not full initially (they are packed but not filled to max)
+    // Columns are not full after reallocation (they are packed but not filled to max)
     try std.testing.expect(!board.columnIsFull(0));
     try std.testing.expect(!board.columnIsFull(7));
 }
 
 test "Board.columnIsFull - after filling" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Manually make a column full by moving its end to the next column's start
     board.columns[0][1] = board.columns[1][0];
@@ -227,8 +214,7 @@ test "Board.columnIsFull - after filling" {
 
 test "Board.reallocateColumns - preserves all cards" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Count cards before reallocation
     const cards_before = board.numCardsOnTableau();
@@ -261,8 +247,7 @@ test "Board.reallocateColumns - preserves all cards" {
 
 test "Board.reallocateColumns - adds spacing" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Manually make columns packed (no spacing)
     board.columns[0][1] = 7;
@@ -287,8 +272,7 @@ test "Board.reallocateColumns - adds spacing" {
 
 test "Board.init - empty cells initially" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    const board = Board.init(&deck);
 
     for (board.cells) |cell| {
         try std.testing.expect(cell == CARD_NONE);
@@ -297,8 +281,7 @@ test "Board.init - empty cells initially" {
 
 test "Board.init - empty foundation piles initially" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    const board = Board.init(&deck);
 
     for (board.piles) |pile| {
         try std.testing.expect(pile == 0);
@@ -307,8 +290,7 @@ test "Board.init - empty foundation piles initially" {
 
 test "Board - complex scenario: move cards between free cells and foundation" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Manually set up a scenario
     board.cells[0] = makeCard(Suit.Hearts, 1); // Ace of hearts
@@ -394,11 +376,8 @@ test "CARD_NONE constant" {
 test "Board initialization idempotent" {
     var deck1 = makeDeck();
     var deck2 = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-
-    board1.init(&deck1);
-    board2.init(&deck2);
+    const board1 = Board.init(&deck1);
+    const board2 = Board.init(&deck2);
 
     // Both boards should have same number of cards in same positions
     for (board1.columns, board2.columns) |col1, col2| {
@@ -408,8 +387,7 @@ test "Board initialization idempotent" {
 
 test "Board - all columns contain valid cards" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     for (board.columns) |col| {
         for (board.cards[col[0]..col[1]]) |card| {
@@ -426,8 +404,7 @@ test "Board - all columns contain valid cards" {
 
 test "makeMove - from column to free cell" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const top_card = board.cardInSlot(0);
     const initial_count = board.numCardsInColumn(0);
@@ -440,8 +417,7 @@ test "makeMove - from column to free cell" {
 
 test "makeMove - from free cell to column" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const test_card = makeCard(Suit.Hearts, 3);
     board.cells[0] = test_card;
@@ -457,8 +433,7 @@ test "makeMove - from free cell to column" {
 
 test "makeMove - from column to foundation" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Set up: place an ace of hearts in a free cell
     const ace_hearts = makeCard(Suit.Hearts, 1);
@@ -473,8 +448,7 @@ test "makeMove - from column to foundation" {
 
 test "makeMove - from foundation to free cell" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Set up: place cards in foundation
     board.piles[0] = 3; // Spades pile with 3 cards
@@ -487,22 +461,22 @@ test "makeMove - from foundation to free cell" {
     try std.testing.expect(board.cells[0] == spadesCard);
 }
 
-test "makeMove - from empty slot (should do nothing)" {
-    var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
-
-    const initial_cards = board.numCardsOnTableau();
-
-    board.makeMove(8, 0); // Try to move from empty free cell 0
-
-    try std.testing.expect(board.numCardsOnTableau() == initial_cards); // No change
-}
+// this is illegal
+//test "makeMove - from empty slot (should do nothing)" {
+//    var deck = makeDeck();
+//    var board = Board{};
+//    board.init(&deck);
+//
+//    const initial_cards = board.numCardsOnTableau();
+//
+//    board.makeMove(8, 0); // Try to move from empty free cell 0
+//
+//    try std.testing.expect(board.numCardsOnTableau() == initial_cards); // No change
+//}
 
 test "makeMove - preserves total card count" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const initial_cards = board.numCardsOnTableau();
 
@@ -524,8 +498,7 @@ test "makeMove - preserves total card count" {
 
 test "makeMove - between free cells" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const test_card = makeCard(Suit.Diamonds, 7);
     board.cells[0] = test_card;
@@ -538,8 +511,7 @@ test "makeMove - between free cells" {
 
 test "makeMove - column to column, removes from source" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const col0_count = board.numCardsInColumn(0);
     const col1_count = board.numCardsInColumn(1);
@@ -552,8 +524,7 @@ test "makeMove - column to column, removes from source" {
 
 test "makeMove - reallocation ensures space" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Get initial card count
     const initial_cards = board.numCardsOnTableau();
@@ -580,8 +551,7 @@ test "makeMove - reallocation ensures space" {
 
 test "makeMove - multiple sequential moves" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const initial_count = board.numCardsOnTableau();
 
@@ -598,8 +568,7 @@ test "makeMove - multiple sequential moves" {
 
 test "makeMove - all foundation piles" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // Set up: place aces in free cells
     board.cells[0] = makeCard(Suit.Spades, 1);
@@ -629,8 +598,7 @@ test "makeMove - all foundation piles" {
 
 test "Board.hash - same board produces same hash" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const hash1 = board.hash();
     const hash2 = board.hash();
@@ -649,10 +617,8 @@ test "Board.hash - empty board is consistent" {
 
 test "Board.hash - changing free cells changes hash" {
     var deck = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-    board1.init(&deck);
-    board2.init(&deck);
+    var board1 = Board.init(&deck);
+    var board2 = Board.init(&deck);
 
     const hash_before = board1.hash();
 
@@ -668,10 +634,8 @@ test "Board.hash - changing free cells changes hash" {
 
 test "Board.hash - changing foundation piles changes hash" {
     var deck = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-    board1.init(&deck);
-    board2.init(&deck);
+    var board1 = Board.init(&deck);
+    var board2 = Board.init(&deck);
 
     const hash_before = board1.hash();
 
@@ -684,10 +648,8 @@ test "Board.hash - changing foundation piles changes hash" {
 
 test "Board.hash - changing tableau cards changes hash" {
     var deck = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-    board1.init(&deck);
-    board2.init(&deck);
+    var board1 = Board.init(&deck);
+    var board2 = Board.init(&deck);
 
     const hash_before = board1.hash();
 
@@ -701,26 +663,22 @@ test "Board.hash - changing tableau cards changes hash" {
 }
 
 test "Board.hash - identical setup after move sequence" {
-    var deck1 = makeDeck();
-    var deck2 = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-    board1.init(&deck1);
-    board2.init(&deck2);
+    var deck = makeDeck();
+    var board = Board.init(&deck);
 
     // Get hash of initial state
-    const hash_initial = board1.hash();
+    const hash_initial = board.hash();
 
     // Make a move
-    board1.makeMove(0, 8);
-    const hash_after_move = board1.hash();
+    board.makeMove(0, 8);
+    const hash_after_move = board.hash();
 
     // Hashes should be different after move
     try std.testing.expect(hash_after_move != hash_initial);
 
     // Undo the move by moving back
-    board1.makeMove(8, 0);
-    const hash_undo = board1.hash();
+    board.makeMove(8, 0);
+    const hash_undo = board.hash();
 
     // After undoing, should match initial (if board layout is same)
     try std.testing.expect(hash_undo == hash_initial);
@@ -749,10 +707,8 @@ test "Board.hash - detects card content differences" {
 
 test "Board.hash - all free cells filled changes hash" {
     var deck = makeDeck();
-    var board1 = Board{};
-    var board2 = Board{};
-    board1.init(&deck);
-    board2.init(&deck);
+    const board1 = Board.init(&deck);
+    var board2 = Board.init(&deck);
 
     const hash_before = board1.hash();
 
@@ -770,8 +726,7 @@ test "Board.hash - all free cells filled changes hash" {
 
 test "Board.hash - card movement detection" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     const hash_initial = board.hash();
 
@@ -789,8 +744,7 @@ test "Board.hash - card movement detection" {
 
 test "Board.hash - reallocate columns preserves hash" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
 
     // make a move such that column 0 is full and requires reallocation
     board.makeMove(6, 0);
@@ -823,8 +777,7 @@ test "findValidMoves - empty board" {
 
 test "findValidMoves - move to empty free cell" {
     var deck = makeDeck();
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
     var buffer: [128][2]u8 = undefined;
 
     const moves = board.findValidMoves(&buffer, false);
@@ -1012,9 +965,8 @@ test "findValidMoves - no moves from empty slots" {
 }
 
 test "findValidMoves - returns slice length matches buffer" {
-    var board = Board{};
     var deck = makeDeck();
-    board.init(&deck);
+    const board = Board.init(&deck);
     var buffer: [128][2]u8 = undefined;
 
     const moves = board.findValidMoves(&buffer, false);

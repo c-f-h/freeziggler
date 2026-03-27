@@ -4,6 +4,8 @@ const verbose = false;
 
 const KEEP_FREECELLS_SORTED = false; // If true, keeps free cells sorted by card value to deduplicate equivalent states
 
+var num_reallocations: u64 = 0;
+
 pub const Card = u8;
 pub const CARD_NONE: Card = 0; // Represents no card or an empty slot
 
@@ -104,28 +106,21 @@ fn cardName(card: Card) []const u8 {
 }
 
 pub const NUM_COLUMNS = 8;
-pub const TABLEAU_SIZE = 64;
+pub const TABLEAU_SIZE = 64; // should be at least 60
 
 pub const Board = struct {
     cells: [4]Card = [_]Card{CARD_NONE} ** 4, // Free cells
     piles: [4]u8 = [_]u8{0} ** 4, // Foundation piles (top card rank)
-    columns: [NUM_COLUMNS][2]u8 = .{ .{ 0, 7 }, .{ 8, 15 }, .{ 16, 23 }, .{ 24, 31 }, .{ 32, 38 }, .{ 40, 46 }, .{ 48, 54 }, .{ 56, 62 } }, // Column ranges (start, end)
+    columns: [NUM_COLUMNS][2]u8 = .{ .{ 0, 7 }, .{ 7, 14 }, .{ 14, 21 }, .{ 21, 28 }, .{ 28, 34 }, .{ 34, 40 }, .{ 40, 46 }, .{ 46, 52 } }, // Column ranges (start, end)
     cards: [TABLEAU_SIZE]Card = [_]Card{CARD_NONE} ** TABLEAU_SIZE, // Cards in the tableau
 
-    pub fn init(board: *Board, deck: *[52]Card) void {
-        board.* = .{};
-        var i: u8 = 0;
-        var j: u8 = 0;
+    pub fn init(deck: *[52]Card) Board {
+        var board: Board = .{};
         var idx: u8 = 0;
         while (idx < 52) : (idx += 1) {
-            board.cards[i + j * 8] = deck[idx];
-            i += 1;
-            const col_size: u8 = if (j < 4) 7 else 6; // First 4 columns get 7 cards, last 4 get 6
-            if (i == col_size) {
-                i = 0;
-                j += 1;
-            }
+            board.cards[idx] = deck[idx];
         }
+        return board;
     }
 
     // slots: columns 0-7, free cells 8-11, foundation piles 12-15
@@ -178,6 +173,9 @@ pub const Board = struct {
         const old_columns = board.columns;
         const num_free_places = TABLEAU_SIZE - board.numCardsOnTableau();
         const free_per_column = @divTrunc(num_free_places, NUM_COLUMNS);
+        if (free_per_column == 0) {
+            @panic("Cannot reallocate columns: no free space available");
+        }
         var idx: u8 = 0;
         for (&board.columns, 0..) |*col, j| {
             col[0] = idx;
@@ -185,6 +183,7 @@ pub const Board = struct {
             @memcpy(board.cards[col[0]..col[1]], old_cards[old_columns[j][0]..old_columns[j][1]]);
             idx = col[1] + free_per_column; // Add free spaces between columns
         }
+        num_reallocations += 1;
     }
 
     pub fn takeCardFromSlot(board: *Board, slot: u8) Card {
@@ -621,8 +620,8 @@ pub fn createRandomBoard(seed: u64) Board {
     var rng = std.Random.DefaultPrng.init(seed);
     var deck = makeDeck();
     std.Random.shuffle(rng.random(), u8, &deck);
-    var board = Board{};
-    board.init(&deck);
+    var board = Board.init(&deck);
+    board.reallocateColumns(); // Ensure we have free space between columns to allow all moves
     return board;
 }
 
@@ -695,7 +694,7 @@ pub fn main(init: std.process.Init) !void {
         _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
     }
     const time_end = std.Io.Clock.now(std.Io.Clock.real, init.io);
-    try stdout.print("Total path length: {}, total iterations: {}\n", .{ total_length, total_iters });
+    try stdout.print("Total path length: {}, total iterations: {}, reallocs: {}\n", .{ total_length, total_iters, num_reallocations });
     try stdout.print("Total time: {} ms\n", .{@as(f64, @floatFromInt(time_end.toMicroseconds() - time_start.toMicroseconds())) / 1000.0});
     try stdout.flush();
 }
