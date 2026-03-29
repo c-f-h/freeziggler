@@ -429,28 +429,7 @@ pub const Move = struct {
     to: u8,
 };
 
-/// A path/solution is represented as a count and array of moves
-pub const Path = struct {
-    moves: [10000]Move = [_]Move{undefined} ** 10000,
-    count: u16 = 0,
-
-    pub fn append(path: *Path, move: Move) bool {
-        if (path.count >= path.moves.len) return false;
-        path.moves[path.count] = move;
-        path.count += 1;
-        return true;
-    }
-
-    pub fn pop(path: *Path) ?Move {
-        if (path.count == 0) return null;
-        path.count -= 1;
-        return path.moves[path.count];
-    }
-
-    pub fn items(path: *const Path) []const Move {
-        return path.moves[0..path.count];
-    }
-};
+pub const Path = std.ArrayList(Move);
 
 /// Check if the board is in a winning state (all 52 cards in foundation piles)
 pub fn isWon(board: *const Board) bool {
@@ -597,12 +576,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     if (solution_hash != 0) {
         var current_hash = solution_hash;
         while (parent_map.get(current_hash)) |path_node| {
-            // Prepend move to path (building backwards)
-            for (0..path.count) |i| {
-                path.moves[path.count - i] = path.moves[path.count - i - 1];
-            }
-            path.moves[0] = path_node.move;
-            path.count += 1;
+            try path.append(allocator, path_node.move);
             current_hash = path_node.parent_hash;
         }
         return true;
@@ -651,12 +625,7 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
         var new_board = starting_board.*;
         new_board.makeMove(move[0], move[1]);
         if (try solveDFS(&new_board, visited, allocator, path)) {
-            // Prepend move to path (building backwards)
-            for (0..path.count) |i| {
-                path.moves[path.count - i] = path.moves[path.count - i - 1];
-            }
-            path.moves[0] = Move{ .from = move[0], .to = move[1] };
-            path.count += 1;
+            try path.append(allocator, Move{ .from = move[0], .to = move[1] });
             return true;
         }
     }
@@ -673,8 +642,11 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
-    //return .{ try solveAStar(&board, &visited, allocator, path), visited.count() };
-    return .{ try solveDFS(&board, &visited, allocator, path), visited.count() };
+    const found = try solveDFS(&board, &visited, allocator, path);
+    if (found) {
+        std.mem.reverse(Move, path.items);
+    }
+    return .{ found, visited.count() };
 }
 
 /// Create a solved board state (all 52 cards in foundation piles, no cards on tableau)
@@ -711,7 +683,7 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 14;
+    var seed: u32 = 15;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 17) : (seed += 1) {
@@ -725,24 +697,25 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
         }
 
-        var solution_path: Path = .{};
+        var solution_path: Path = .empty;
         const found, const iters = try solveFreeCell(board, allocator, &solution_path);
-        total_length += solution_path.count;
+        const path_length = solution_path.items.len;
+        total_length += path_length;
         total_iters += iters;
 
         if (verbose) {
-            std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, solution_path.count, iters });
+            std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, path_length, iters });
 
             if (found) {
                 // Show first 20 moves of solution
                 std.debug.print("SUCCESS! Puzzle solved!\n", .{});
 
                 std.debug.print("\nFirst 20 moves of solution:\n", .{});
-                for (solution_path.items()[0..@min(20, solution_path.count)], 0..) |move, i| {
+                for (solution_path.items()[0..@min(20, path_length)], 0..) |move, i| {
                     std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
                 }
-                if (solution_path.count > 20) {
-                    std.debug.print("  ... and {d} more moves\n", .{solution_path.count - 20});
+                if (path_length > 20) {
+                    std.debug.print("  ... and {d} more moves\n", .{path_length - 20});
                 }
 
                 // Verify solution
@@ -757,7 +730,7 @@ pub fn main(init: std.process.Init) !void {
                 break;
             }
         } else {
-            try stdout.print(" {d:04}: {} {d:>5} {d:>7}\n", .{ seed, found, solution_path.count, iters });
+            try stdout.print(" {d:04}: {} {d:>5} {d:>7}\n", .{ seed, found, path_length, iters });
             try stdout.flush();
         }
 
