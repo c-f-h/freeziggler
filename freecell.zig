@@ -2,7 +2,7 @@ const std = @import("std");
 
 const verbose = false;
 
-const KEEP_FREECELLS_SORTED = true; // If true, keeps free cells sorted by card value to deduplicate equivalent states
+pub const KEEP_FREECELLS_SORTED = true; // If true, keeps free cells sorted by card value to deduplicate equivalent states
 
 const heuristic = heuristic_numNonMatching;
 
@@ -231,10 +231,10 @@ pub const Board = struct {
         }
     }
 
-    pub fn makeMove(board: *Board, from: u8, to: u8) void {
-        const card = board.takeCardFromSlot(from);
+    pub fn makeMove(board: *Board, move: Move) void {
+        const card = board.takeCardFromSlot(move.from);
         if (card == CARD_NONE) @panic("invalid move"); // No card to move
-        board.putCardInSlot(to, card);
+        board.putCardInSlot(move.to, card);
     }
 
     pub fn print(board: *const Board) void {
@@ -274,10 +274,9 @@ pub const Board = struct {
         }
     }
 
-    /// Find all valid moves (from any slot to any other slot) as pairs (from, to) of u8
-    /// Takes a buffer of u8 pairs and returns a slice into it containing the move pairs
-    /// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
-    pub fn findValidMoves(board: *const Board, buffer: [][2]u8, allow_foundation_moves: bool) [][2]u8 {
+    /// Find all valid moves (from any slot to any other slot).
+    /// Takes a buffer of Move structs and returns a slice into it containing the valid moves
+    pub fn findValidMoves(board: *const Board, buffer: []Move) []Move {
         var count: usize = 0;
 
         // Check source slots from columns and free cells (always 0-11)
@@ -328,48 +327,10 @@ pub const Board = struct {
 
                 if (is_valid) {
                     if (count < buffer.len) {
-                        buffer[count] = .{ from, to };
+                        buffer[count] = Move{ .from = from, .to = to };
                         count += 1;
                     } else {
                         @panic("findValidMoves: insufficient buffer space");
-                    }
-                }
-            }
-        }
-
-        // If enabled, also check moves FROM foundation piles (non-standard)
-        if (allow_foundation_moves) {
-            var from_foundation: u8 = NUM_COLUMNS + 4;
-            while (from_foundation < NUM_COLUMNS + 8) : (from_foundation += 1) {
-                const card = board.cardInSlot(from_foundation);
-                if (card == CARD_NONE) continue;
-
-                // Check destinations for foundation cards
-                var to: u8 = 0;
-                while (to < NUM_COLUMNS + 4) : (to += 1) {
-                    if (from_foundation == to) continue;
-
-                    const target = board.cardInSlot(to);
-                    var is_valid = false;
-
-                    if (to < NUM_COLUMNS + 4) {
-                        // Destination is column or free cell
-                        if (target == CARD_NONE) {
-                            // Can move to empty slot
-                            is_valid = true;
-                        } else if (to < NUM_COLUMNS and canMoveBelow(card, target)) {
-                            // Can move to column if alternating color and descending rank
-                            is_valid = true;
-                        }
-                    }
-
-                    if (is_valid) {
-                        if (count < buffer.len) {
-                            buffer[count] = .{ from_foundation, to };
-                            count += 1;
-                        } else {
-                            @panic("findValidMoves: insufficient buffer space");
-                        }
                     }
                 }
             }
@@ -503,7 +464,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     try open_set.put(start_hash, starting_board.*);
     try best_cost.put(start_hash, 0);
 
-    var move_buffer: [128][2]u8 = undefined;
+    var move_buffer: [128]Move = undefined;
 
     var num_iter: u32 = 0;
     var solution_hash: u64 = 0;
@@ -537,7 +498,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
         try visited.put(cur_hash, {});
 
         // Generate all valid moves from this position
-        const valid_moves = board.findValidMoves(&move_buffer, false);
+        const valid_moves = board.findValidMoves(&move_buffer);
 
         num_iter += 1;
         if (verbose and num_iter % 100000 == 0) {
@@ -546,13 +507,12 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
             printMoves(valid_moves);
         }
 
-        for (valid_moves) |move_pair| {
+        for (valid_moves) |move| {
             var new_board = board.*;
-            new_board.makeMove(move_pair[0], move_pair[1]);
+            new_board.makeMove(move);
 
             const new_hash = new_board.hash();
             const new_cost = cur_node.num_moves + 1;
-            const move = Move{ .from = move_pair[0], .to = move_pair[1] };
 
             // Only add to queue if we found a better path (or haven't seen this state)
             if (best_cost.get(new_hash)) |known_cost| {
@@ -585,7 +545,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     return false;
 }
 
-const MovePair = struct { move: [2]u8, heuristic: u16 };
+const MovePair = struct { move: Move, heuristic: u16 };
 
 fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
     return a.heuristic < b.heuristic;
@@ -606,15 +566,15 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
     var stack_buf: [DFS_BUFFER_SIZE]u8 = undefined;
     var stack_alloc = std.heap.FixedBufferAllocator.init(&stack_buf);
 
-    const move_buffer = stack_alloc.allocator().alloc([2]u8, 128) catch @panic("DFS stack buffer overflow");
-    const valid_moves = starting_board.findValidMoves(move_buffer, false);
+    const move_buffer = stack_alloc.allocator().alloc(Move, 128) catch @panic("DFS stack buffer overflow");
+    const valid_moves = starting_board.findValidMoves(move_buffer);
     var move_heuristic = stack_alloc.allocator().alloc(MovePair, valid_moves.len) catch @panic("DFS stack buffer overflow");
 
     // compute heuristic value for each valid move
-    for (valid_moves, 0..) |move_pair, i| {
+    for (valid_moves, 0..) |move, i| {
         var new_board = starting_board.*;
-        new_board.makeMove(move_pair[0], move_pair[1]);
-        move_heuristic[i] = MovePair{ .move = move_pair, .heuristic = heuristic(&new_board) };
+        new_board.makeMove(move);
+        move_heuristic[i] = MovePair{ .move = move, .heuristic = heuristic(&new_board) };
     }
 
     // Sort moves by heuristic value (lowest first)
@@ -623,9 +583,9 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
     for (move_heuristic) |*move_pair| {
         const move = move_pair.move;
         var new_board = starting_board.*;
-        new_board.makeMove(move[0], move[1]);
+        new_board.makeMove(move);
         if (try solveDFS(&new_board, visited, allocator, path)) {
-            try path.append(allocator, Move{ .from = move[0], .to = move[1] });
+            try path.append(allocator, move);
             return true;
         }
     }
@@ -636,7 +596,6 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
 /// Main solver entry point: attempts to solve the freecell puzzle
 /// Modifies path to contain the solution moves if found
 /// Returns true if a solution is found
-/// allow_foundation_moves: if true, allows moving cards FROM foundation piles (non-standard)
 pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     var board = initial_board;
     var visited = std.AutoHashMap(u64, void).init(allocator);
@@ -666,9 +625,9 @@ pub fn createRandomBoard(seed: u64) Board {
     return board;
 }
 
-fn printMoves(moves: [][2]u8) void {
-    for (moves) |move_pair| {
-        std.debug.print("  slot {d} -> slot {d}\n", .{ move_pair[0], move_pair[1] });
+fn printMoves(moves: []const Move) void {
+    for (moves) |move| {
+        std.debug.print("  slot {d} -> slot {d}\n", .{ move.from, move.to });
     }
 }
 
@@ -721,7 +680,7 @@ pub fn main(init: std.process.Init) !void {
                 // Verify solution
                 var verify_board = board;
                 for (solution_path.items()) |move| {
-                    verify_board.makeMove(move.from, move.to);
+                    verify_board.makeMove(move);
                 }
                 std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
             } else {
