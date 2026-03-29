@@ -618,7 +618,7 @@ fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
 }
 
 fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
-    const DFS_BUFFER_SIZE = 32;
+    const DFS_BUFFER_SIZE = 512;
     if (isWon(starting_board)) {
         return true;
     }
@@ -629,11 +629,14 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
     }
     try visited.put(board_hash, {});
 
-    var move_buffer: [DFS_BUFFER_SIZE][2]u8 = undefined;
-    const valid_moves = starting_board.findValidMoves(&move_buffer, false);
-    var move_heuristic_buffer: [DFS_BUFFER_SIZE]MovePair = undefined;
-    var move_heuristic = move_heuristic_buffer[0..valid_moves.len];
+    var stack_buf: [DFS_BUFFER_SIZE]u8 = undefined;
+    var stack_alloc = std.heap.FixedBufferAllocator.init(&stack_buf);
 
+    const move_buffer = stack_alloc.allocator().alloc([2]u8, 128) catch @panic("DFS stack buffer overflow");
+    const valid_moves = starting_board.findValidMoves(move_buffer, false);
+    var move_heuristic = stack_alloc.allocator().alloc(MovePair, valid_moves.len) catch @panic("DFS stack buffer overflow");
+
+    // compute heuristic value for each valid move
     for (valid_moves, 0..) |move_pair, i| {
         var new_board = starting_board.*;
         new_board.makeMove(move_pair[0], move_pair[1]);
@@ -643,15 +646,16 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
     // Sort moves by heuristic value (lowest first)
     std.mem.sort(MovePair, move_heuristic, {}, compareMoves);
 
-    for (move_heuristic) |move_pair| {
+    for (move_heuristic) |*move_pair| {
+        const move = move_pair.move;
         var new_board = starting_board.*;
-        new_board.makeMove(move_pair.move[0], move_pair.move[1]);
+        new_board.makeMove(move[0], move[1]);
         if (try solveDFS(&new_board, visited, allocator, path)) {
             // Prepend move to path (building backwards)
             for (0..path.count) |i| {
                 path.moves[path.count - i] = path.moves[path.count - i - 1];
             }
-            path.moves[0] = Move{ .from = move_pair.move[0], .to = move_pair.move[1] };
+            path.moves[0] = Move{ .from = move[0], .to = move[1] };
             path.count += 1;
             return true;
         }
