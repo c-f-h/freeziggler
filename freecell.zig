@@ -457,13 +457,13 @@ pub fn isWon(board: *const Board) bool {
     return board.piles[0] == 13 and board.piles[1] == 13 and board.piles[2] == 13 and board.piles[3] == 13;
 }
 
-const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u32 };
+const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u16 };
 
 const heuristic_naive = Board.numRemainingCards;
 
-fn heuristic_numBlocked(board: *const Board) u32 {
+fn heuristic_numBlocked(board: *const Board) u16 {
     // Count cards blocked under other cards in columns
-    var blocked: u32 = 0;
+    var blocked: u16 = 0;
     for (board.columns) |col| {
         // All but the top card in each column are blocked
         const num_in_col = col[1] - col[0];
@@ -476,9 +476,9 @@ fn heuristic_numBlocked(board: *const Board) u32 {
     return board.numRemainingCards() + 2 * blocked;
 }
 
-fn heuristic_numNonMatching(board: *const Board) u32 {
+fn heuristic_numNonMatching(board: *const Board) u16 {
     // Count cards that are not yet in the foundation piles and are not Aces (i.e., not yet "free")
-    var count: u32 = 0;
+    var count: u16 = 0;
     for (board.columns) |col| {
         const num_in_col = col[1] - col[0];
         if (num_in_col > 1) {
@@ -492,8 +492,8 @@ fn heuristic_numNonMatching(board: *const Board) u32 {
 }
 
 fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
-    const a_priority = @as(u32, a.num_moves) + a.heuristic_value;
-    const b_priority = @as(u32, b.num_moves) + b.heuristic_value;
+    const a_priority = @as(u16, a.num_moves) + a.heuristic_value;
+    const b_priority = @as(u16, b.num_moves) + b.heuristic_value;
     if (a_priority > b_priority) {
         return std.math.Order.gt;
     } else if (a_priority < b_priority) {
@@ -611,7 +611,7 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     return false;
 }
 
-const MovePair = struct { move: [2]u8, heuristic: u32 };
+const MovePair = struct { move: [2]u8, heuristic: u16 };
 
 fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
     return a.heuristic < b.heuristic;
