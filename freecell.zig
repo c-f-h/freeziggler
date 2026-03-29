@@ -2,7 +2,7 @@ const std = @import("std");
 
 const verbose = false;
 
-const KEEP_FREECELLS_SORTED = false; // If true, keeps free cells sorted by card value to deduplicate equivalent states
+const KEEP_FREECELLS_SORTED = true; // If true, keeps free cells sorted by card value to deduplicate equivalent states
 
 const heuristic = heuristic_numNonMatching;
 
@@ -711,7 +711,7 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 16;
+    var seed: u32 = 14;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 17) : (seed += 1) {

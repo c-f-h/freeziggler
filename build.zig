@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    exe.stack_size = 4 * 1024 * 1024 * 1024; // 4 GiB
+    exe.stack_size = 8 * 1024 * 1024 * 1024; // 8 GiB
 
     b.installArtifact(exe);
 
