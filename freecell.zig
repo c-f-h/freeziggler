@@ -431,7 +431,7 @@ pub const Move = struct {
 
 /// A path/solution is represented as a count and array of moves
 pub const Path = struct {
-    moves: [1000]Move = [_]Move{undefined} ** 1000,
+    moves: [10000]Move = [_]Move{undefined} ** 10000,
     count: u16 = 0,
 
     pub fn append(path: *Path, move: Move) bool {
@@ -611,6 +611,55 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     return false;
 }
 
+const MovePair = struct { move: [2]u8, heuristic: u32 };
+
+fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
+    return a.heuristic < b.heuristic;
+}
+
+fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
+    const DFS_BUFFER_SIZE = 32;
+    if (isWon(starting_board)) {
+        return true;
+    }
+
+    const board_hash = starting_board.hash();
+    if (visited.contains(board_hash)) {
+        return false;
+    }
+    try visited.put(board_hash, {});
+
+    var move_buffer: [DFS_BUFFER_SIZE][2]u8 = undefined;
+    const valid_moves = starting_board.findValidMoves(&move_buffer, false);
+    var move_heuristic_buffer: [DFS_BUFFER_SIZE]MovePair = undefined;
+    var move_heuristic = move_heuristic_buffer[0..valid_moves.len];
+
+    for (valid_moves, 0..) |move_pair, i| {
+        var new_board = starting_board.*;
+        new_board.makeMove(move_pair[0], move_pair[1]);
+        move_heuristic[i] = MovePair{ .move = move_pair, .heuristic = heuristic(&new_board) };
+    }
+
+    // Sort moves by heuristic value (lowest first)
+    std.mem.sort(MovePair, move_heuristic, {}, compareMoves);
+
+    for (move_heuristic) |move_pair| {
+        var new_board = starting_board.*;
+        new_board.makeMove(move_pair.move[0], move_pair.move[1]);
+        if (try solveDFS(&new_board, visited, allocator, path)) {
+            // Prepend move to path (building backwards)
+            for (0..path.count) |i| {
+                path.moves[path.count - i] = path.moves[path.count - i - 1];
+            }
+            path.moves[0] = Move{ .from = move_pair.move[0], .to = move_pair.move[1] };
+            path.count += 1;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /// Main solver entry point: attempts to solve the freecell puzzle
 /// Modifies path to contain the solution moves if found
 /// Returns true if a solution is found
@@ -620,8 +669,8 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
-    //return solve(&board, &visited, path);
-    return .{ try solveAStar(&board, &visited, allocator, path), visited.count() };
+    //return .{ try solveAStar(&board, &visited, allocator, path), visited.count() };
+    return .{ try solveDFS(&board, &visited, allocator, path), visited.count() };
 }
 
 /// Create a solved board state (all 52 cards in foundation piles, no cards on tableau)
