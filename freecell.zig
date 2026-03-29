@@ -551,13 +551,39 @@ fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
     return a.heuristic < b.heuristic;
 }
 
-fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
-    const DFS_BUFFER_SIZE = 512;
-    if (isWon(starting_board)) {
+fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
+    if (isWon(board)) {
         return true;
     }
 
-    const board_hash = starting_board.hash();
+    const board_hash = board.hash();
+    if (visited.contains(board_hash)) {
+        return false;
+    }
+    try visited.put(board_hash, {});
+
+    var move_buffer: [64]Move = undefined;
+    const valid_moves = board.findValidMoves(&move_buffer);
+
+    for (valid_moves) |move| {
+        var new_board = board.*;
+        new_board.makeMove(move);
+        if (try solveDFS(&new_board, visited, allocator, path)) {
+            try path.append(allocator, move);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
+    const DFS_BUFFER_SIZE = 512;
+    if (isWon(board)) {
+        return true;
+    }
+
+    const board_hash = board.hash();
     if (visited.contains(board_hash)) {
         return false;
     }
@@ -567,12 +593,12 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
     var stack_alloc = std.heap.FixedBufferAllocator.init(&stack_buf);
 
     const move_buffer = stack_alloc.allocator().alloc(Move, 128) catch @panic("DFS stack buffer overflow");
-    const valid_moves = starting_board.findValidMoves(move_buffer);
+    const valid_moves = board.findValidMoves(move_buffer);
     var move_heuristic = stack_alloc.allocator().alloc(MovePair, valid_moves.len) catch @panic("DFS stack buffer overflow");
 
     // compute heuristic value for each valid move
     for (valid_moves, 0..) |move, i| {
-        var new_board = starting_board.*;
+        var new_board = board.*;
         new_board.makeMove(move);
         move_heuristic[i] = MovePair{ .move = move, .heuristic = heuristic(&new_board) };
     }
@@ -582,9 +608,9 @@ fn solveDFS(starting_board: *Board, visited: *std.AutoHashMap(u64, void), alloca
 
     for (move_heuristic) |*move_pair| {
         const move = move_pair.move;
-        var new_board = starting_board.*;
+        var new_board = board.*;
         new_board.makeMove(move);
-        if (try solveDFS(&new_board, visited, allocator, path)) {
+        if (try solveBestFirstSearch(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
         }
@@ -601,7 +627,7 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
-    const found = try solveDFS(&board, &visited, allocator, path);
+    const found = try solveBestFirstSearch(&board, &visited, allocator, path);
     if (found) {
         std.mem.reverse(Move, path.items);
     }
@@ -642,7 +668,7 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 15;
+    var seed: u32 = 14;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 17) : (seed += 1) {
