@@ -16,8 +16,6 @@ pub fn isWon(board: *const Board) bool {
     return board.piles[0] == 13 and board.piles[1] == 13 and board.piles[2] == 13 and board.piles[3] == 13;
 }
 
-const BoardNode = struct { board_hash: u64, num_moves: u16, heuristic_value: u16 };
-
 const heuristic = heuristic_numNonMatching;
 
 fn heuristic_numBlocked(board: *const Board) u16 {
@@ -45,9 +43,24 @@ fn heuristic_numNonMatching(board: *const Board) u16 {
     return heuristic_numBlocked(board) + 1 * count;
 }
 
-fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
-    const a_priority = @as(u16, a.num_moves) + a.heuristic_value;
-    const b_priority = @as(u16, b.num_moves) + b.heuristic_value;
+const AStarNode = struct {
+    board: Board,
+    heuristic_value: u16,
+    best_cost: u16, // Shortest known number of moves to reach this state
+    parent_hash: u64, // Hash of parent state which achieves the lowest known cost
+    move: Move, // Move taken from parent state to reach this state
+};
+
+fn nodePriority(node_map: *std.AutoHashMap(u64, AStarNode), hash: u64) u32 {
+    if (node_map.getPtr(hash)) |node| {
+        return @as(u32, node.best_cost) + @as(u32, node.heuristic_value);
+    }
+    return std.math.maxInt(u32);
+}
+
+fn bpCompare(node_map: *std.AutoHashMap(u64, AStarNode), a: u64, b: u64) std.math.Order {
+    const a_priority = nodePriority(node_map, a);
+    const b_priority = nodePriority(node_map, b);
     if (a_priority > b_priority) {
         return std.math.Order.gt;
     } else if (a_priority < b_priority) {
@@ -57,58 +70,61 @@ fn bpCompare(_: void, a: BoardNode, b: BoardNode) std.math.Order {
     }
 }
 
-fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
-    var pqueue = std.PriorityQueue(BoardNode, void, bpCompare).initContext({});
+// Data for closed nodes - only required to reconstruct solution path
+const AStarClosedNode = struct {
+    parent_hash: u64,
+    move: Move,
+};
 
-    var open_set = std.AutoHashMap(u64, Board).init(allocator);
+fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
+    // Hash map of nodes yet to be visited
+    var open_set = std.AutoHashMap(u64, AStarNode).init(allocator);
     defer open_set.deinit();
 
-    // Track best known distance to each state
-    var best_cost = std.AutoHashMap(u64, u16).init(allocator);
-    defer best_cost.deinit();
+    // Hash map of already visited nodes
+    var closed_set = std.AutoHashMap(u64, AStarClosedNode).init(allocator);
+    defer closed_set.deinit();
 
-    // Track parent hash and move for path reconstruction
-    const PathNode = struct { parent_hash: u64, move: Move };
-    var parent_map = std.AutoHashMap(u64, PathNode).init(allocator);
-    defer parent_map.deinit();
+    var pqueue = std.PriorityQueue(u64, *std.AutoHashMap(u64, AStarNode), bpCompare).initContext(&open_set);
 
     const start_hash = starting_board.hash();
-    try pqueue.push(allocator, BoardNode{ .board_hash = start_hash, .num_moves = 0, .heuristic_value = heuristic(starting_board) });
-    try open_set.put(start_hash, starting_board.*);
-    try best_cost.put(start_hash, 0);
+    try open_set.put(start_hash, AStarNode{
+        .board = starting_board.*,
+        .heuristic_value = heuristic(starting_board),
+        .best_cost = 0,
+        .parent_hash = 0,
+        .move = Move{ .from = 0, .to = 0 },
+    });
+    try pqueue.push(allocator, start_hash);
 
     var move_buffer: [128]Move = undefined;
 
     var num_iter: u32 = 0;
     var solution_hash: u64 = 0;
 
-    while (pqueue.pop()) |cur_node| {
-        const cur_hash = cur_node.board_hash;
-        const board = &open_set.get(cur_hash).?;
+    while (pqueue.pop()) |cur_hash| {
+        // We might have duplicate nodes due to inserting shorter paths to a node afterwards
+        const cur_node = open_set.get(cur_hash) orelse continue;
+
+        // move node from open to closed set
+        _ = open_set.remove(cur_hash);
+        try closed_set.put(cur_hash, .{
+            .parent_hash = cur_node.parent_hash,
+            .move = cur_node.move,
+        });
+
+        const board = &cur_node.board;
 
         if (isWon(board)) {
             solution_hash = cur_hash;
             break;
         }
 
-        if (visited.contains(cur_hash)) {
-            continue;
-        }
-
-        // Only continue if this is the best path we have found to this node so far
-        if (best_cost.get(cur_hash)) |known_cost| {
-            if (cur_node.num_moves > known_cost) {
-                continue;
-            }
-        }
-
-        try visited.put(cur_hash, {});
-
         const valid_moves = board.findValidMoves(&move_buffer);
 
         num_iter += 1;
         if (num_iter % 100000 == 0) {
-            std.debug.print("Iteration {d}, queue length {d}, {d} hashes, found {d} valid moves:\n", .{ num_iter, pqueue.count(), visited.count(), valid_moves.len });
+            std.debug.print("Iteration {d}, queue length {d}, {d} hashes, found {d} valid moves:\n", .{ num_iter, pqueue.count(), closed_set.count(), valid_moves.len });
             board.print();
             printMoves(valid_moves);
         }
@@ -118,20 +134,32 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
             new_board.makeMove(move);
 
             const new_hash = new_board.hash();
-            const new_cost = cur_node.num_moves + 1;
+            const new_cost = cur_node.best_cost + 1;
 
-            // Only add to queue if we found a better path (or haven't seen this state)
-            if (best_cost.get(new_hash)) |known_cost| {
-                if (new_cost < known_cost) {
-                    try best_cost.put(new_hash, new_cost);
-                    try parent_map.put(new_hash, PathNode{ .parent_hash = cur_node.board_hash, .move = move });
-                    try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = new_cost, .heuristic_value = heuristic(&new_board) });
+            // check if we already found another path to this node
+            const existing_node = open_set.getPtr(new_hash);
+
+            if (existing_node) |nn| {
+                // is already an open node - check if this path is better than the previously known one
+                if (new_cost < nn.best_cost) {
+                    nn.best_cost = new_cost;
+                    nn.parent_hash = cur_hash;
+                    nn.move = move;
+                    // board state and heuristic are unchanged
+
+                    // push a new (duplicate) entry to the pqueue to force reordering
+                    try pqueue.push(allocator, new_hash);
                 }
-            } else if (!visited.contains(new_hash)) {
-                try best_cost.put(new_hash, new_cost);
-                try open_set.put(new_hash, new_board);
-                try parent_map.put(new_hash, PathNode{ .parent_hash = cur_node.board_hash, .move = move });
-                try pqueue.push(allocator, BoardNode{ .board_hash = new_hash, .num_moves = new_cost, .heuristic_value = heuristic(&new_board) });
+            } else if (!closed_set.contains(new_hash)) {
+                // not in closed set - add to open set
+                try open_set.put(new_hash, AStarNode{
+                    .board = new_board,
+                    .heuristic_value = heuristic(&new_board),
+                    .best_cost = new_cost,
+                    .parent_hash = cur_hash,
+                    .move = move,
+                });
+                try pqueue.push(allocator, new_hash);
             }
         }
     }
@@ -139,14 +167,15 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
     // Reconstruct path by tracing back through parent pointers
     if (solution_hash != 0) {
         var current_hash = solution_hash;
-        while (parent_map.get(current_hash)) |path_node| {
+        while (current_hash != start_hash) {
+            const path_node = closed_set.getPtr(current_hash) orelse break;
             try path.append(allocator, path_node.move);
             current_hash = path_node.parent_hash;
         }
-        return true;
+        return .{ true, open_set.count() + closed_set.count() };
     }
 
-    return false;
+    return .{ false, open_set.count() + closed_set.count() };
 }
 
 const MovePair = struct { move: Move, heuristic: u16 };
@@ -223,14 +252,12 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
 
 pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     var board = initial_board;
-    var visited = std.AutoHashMap(u64, void).init(allocator);
-    defer visited.deinit();
 
-    const found = try solveAStar(&board, &visited, allocator, path);
-    if (found) {
+    const result = try solveAStar(&board, allocator, path);
+    if (result[0]) {
         std.mem.reverse(Move, path.items);
     }
-    return .{ found, visited.count() };
+    return result;
 }
 
 fn printMoves(moves: []const Move) void {
