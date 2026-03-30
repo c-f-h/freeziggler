@@ -686,7 +686,7 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
-    const found = try solveBestFirstSearch(&board, &visited, allocator, path);
+    const found = try solveAStar(&board, &visited, allocator, path);
     if (found) {
         std.mem.reverse(Move, path.items);
     }
@@ -730,7 +730,7 @@ pub fn main(init: std.process.Init) !void {
     var seed: u32 = 0;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
-    while (seed < 17) : (seed += 1) {
+    while (seed < 30) : (seed += 1) {
         const board = createRandomBoard(seed);
 
         if (verbose) {
