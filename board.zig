@@ -1,99 +1,365 @@
 const std = @import("std");
-const freecell = @import("freecell.zig");
+const card_mod = @import("card.zig");
 
-// Import types and functions from main module
-const Card = freecell.Card;
-const Suit = freecell.Suit;
-const Board = freecell.Board;
-const CARD_NONE = freecell.CARD_NONE;
-const RED_BIT = freecell.RED_BIT;
-const NUM_COLUMNS = freecell.NUM_COLUMNS;
-const TABLEAU_SIZE = freecell.TABLEAU_SIZE;
+const Card = card_mod.Card;
+const CARD_NONE = card_mod.CARD_NONE;
+const Suit = card_mod.Suit;
+const RED_BIT = card_mod.RED_BIT;
+const color = card_mod.color;
+const makeCard = card_mod.makeCard;
+const canMoveBelow = card_mod.canMoveBelow;
+const bubbleIntoPlace = card_mod.bubbleIntoPlace;
+const printCard = card_mod.printCard;
+const makeDeck = card_mod.makeDeck;
 
-// Import functions
-const color = freecell.color;
-const suitIndex = freecell.suitIndex;
-const makeCard = freecell.makeCard;
-const suitString = freecell.suitString;
-const rankName = freecell.rankName;
-const canMoveBelow = freecell.canMoveBelow;
-const makeDeck = freecell.makeDeck;
-const Move = freecell.Move;
+pub const NUM_COLUMNS = 8;
+pub const TABLEAU_SIZE = 64;
+
+pub const Move = struct {
+    from: u8,
+    to: u8,
+};
+
+/// If true, keeps free cells sorted by card value to deduplicate equivalent states
+pub const KEEP_FREECELLS_SORTED = true;
+
+/// If true, keeps columns sorted by anchor card (rear-most) to deduplicate equivalent states
+pub const KEEP_COLUMNS_SORTED = true;
+
+pub const Board = struct {
+    cells: [4]Card = [_]Card{CARD_NONE} ** 4,
+    piles: [4]u8 = [_]u8{0} ** 4,
+    columns: [NUM_COLUMNS][2]u8 = .{ .{ 0, 7 }, .{ 7, 14 }, .{ 14, 21 }, .{ 21, 28 }, .{ 28, 34 }, .{ 34, 40 }, .{ 40, 46 }, .{ 46, 52 } },
+    cards: [TABLEAU_SIZE]Card = [_]Card{CARD_NONE} ** TABLEAU_SIZE,
+
+    pub fn init(deck: *[52]Card) Board {
+        var board: Board = .{};
+        var idx: u8 = 0;
+        while (idx < 52) : (idx += 1) {
+            board.cards[idx] = deck[idx];
+        }
+        if (KEEP_COLUMNS_SORTED) {
+            board.sortColumns();
+        }
+        return board;
+    }
+
+    pub fn initFromColumns(columns: [NUM_COLUMNS][]Card) Board {
+        var board: Board = .{};
+        var idx: u8 = 0;
+        var j: u8 = 0;
+        while (j < NUM_COLUMNS) : (j += 1) {
+            const col = columns[j];
+            board.columns[j][0] = idx;
+            for (col) |c| {
+                if (idx < TABLEAU_SIZE) {
+                    board.cards[idx] = c;
+                    idx += 1;
+                } else {
+                    @panic("Too many cards in tableau");
+                }
+            }
+            board.columns[j][1] = idx;
+        }
+        if (KEEP_COLUMNS_SORTED) {
+            board.sortColumns();
+        }
+        return board;
+    }
+
+    /// Slots: columns 0-7, free cells 8-11, foundation piles 12-15
+    pub fn cardInSlot(board: *const Board, slot: u8) Card {
+        if (slot < NUM_COLUMNS) {
+            const col = board.columns[slot];
+            if (col[0] < col[1]) {
+                return board.cards[col[1] - 1];
+            }
+        } else if (slot < NUM_COLUMNS + 4) {
+            return board.cells[slot - NUM_COLUMNS];
+        } else if (slot < NUM_COLUMNS + 8) {
+            const pileIndex = slot - NUM_COLUMNS - 4;
+            if (board.piles[pileIndex] > 0) {
+                return makeCard(@enumFromInt(pileIndex << 6), board.piles[pileIndex]);
+            }
+        }
+        return CARD_NONE;
+    }
+
+    pub fn numCardsInColumn(board: *const Board, column: u8) u8 {
+        return board.columns[column][1] - board.columns[column][0];
+    }
+
+    pub fn numCardsOnTableau(board: *const Board) u8 {
+        var total: u8 = 0;
+        for (board.columns) |col| {
+            total += col[1] - col[0];
+        }
+        return total;
+    }
+
+    pub fn numRemainingCards(board: *const Board) u8 {
+        return 52 - board.piles[0] - board.piles[1] - board.piles[2] - board.piles[3];
+    }
+
+    pub fn columnIsFull(board: *const Board, column: u8) bool {
+        // NB: This implementation does not rely on the order in which the columns are stored, since
+        // we want to be able to reorder the columns.
+        const next_idx = board.columns[column][1];
+        if (next_idx >= TABLEAU_SIZE) {
+            return true;
+        }
+        for (board.columns, 0..) |other_col, i| {
+            if (i == column) continue;
+            if (other_col[0] <= next_idx and next_idx < other_col[1]) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Guarantees that there are free spaces between columns for moving cards around
+    pub fn reallocateColumns(board: *Board) void {
+        const old_cards = board.cards;
+        const old_columns = board.columns;
+        const num_free_places = TABLEAU_SIZE - board.numCardsOnTableau();
+        const free_per_column = @divTrunc(num_free_places, NUM_COLUMNS);
+        if (free_per_column == 0) {
+            @panic("Cannot reallocate columns: no free space available");
+        }
+        var idx: u8 = 0;
+        for (&board.columns, 0..) |*col, j| {
+            col[0] = idx;
+            col[1] = idx + old_columns[j][1] - old_columns[j][0];
+            @memcpy(board.cards[col[0]..col[1]], old_cards[old_columns[j][0]..old_columns[j][1]]);
+            idx = col[1] + free_per_column;
+        }
+    }
+
+    pub fn takeCardFromSlot(board: *Board, slot: u8) Card {
+        const card = board.cardInSlot(slot);
+        if (card == CARD_NONE) return CARD_NONE;
+
+        if (slot < NUM_COLUMNS) {
+            board.columns[slot][1] -= 1;
+        } else if (slot < NUM_COLUMNS + 4) {
+            board.cells[slot - NUM_COLUMNS] = CARD_NONE;
+            if (KEEP_FREECELLS_SORTED)
+                bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
+        } else if (slot < NUM_COLUMNS + 8) {
+            const pileIndex = slot - NUM_COLUMNS - 4;
+            board.piles[pileIndex] -= 1;
+        }
+
+        return card;
+    }
+
+    pub fn putCardInSlot(board: *Board, slot: u8, c: Card) void {
+        if (slot < NUM_COLUMNS) {
+            if (board.columnIsFull(slot)) {
+                board.reallocateColumns();
+            }
+            board.cards[board.columns[slot][1]] = c;
+            board.columns[slot][1] += 1;
+        } else if (slot < NUM_COLUMNS + 4) {
+            board.cells[slot - NUM_COLUMNS] = c;
+            if (KEEP_FREECELLS_SORTED)
+                bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
+        } else if (slot < NUM_COLUMNS + 8) {
+            const pileIndex = slot - NUM_COLUMNS - 4;
+            board.piles[pileIndex] += 1;
+        }
+    }
+
+    /// Make the given move. This may reorder the free cells or columns.
+    pub fn makeMove(board: *Board, move: Move) void {
+        const c = board.takeCardFromSlot(move.from);
+        if (c == CARD_NONE) @panic("invalid move");
+        board.putCardInSlot(move.to, c);
+
+        if (KEEP_COLUMNS_SORTED and !board.columnsAreSorted()) {
+            board.sortColumns();
+        }
+    }
+
+    pub fn print(board: *const Board) void {
+        std.debug.print("  |", .{});
+        for (board.cells) |cell| {
+            printCard(cell);
+            std.debug.print("|", .{});
+        }
+
+        std.debug.print("         |", .{});
+        for (board.piles, 0..) |pile, i| {
+            if (pile > 0) {
+                const suit: Suit = @enumFromInt(i << 6);
+                printCard(makeCard(suit, pile));
+            } else {
+                std.debug.print("  ", .{});
+            }
+            std.debug.print("|", .{});
+        }
+
+        std.debug.print("\n\nColumns:\n", .{});
+        var row: u8 = 0;
+        var more = true;
+        while (more) : (row += 1) {
+            more = false;
+            var col: u8 = 0;
+            while (col < 8) : (col += 1) {
+                if (row < board.columns[col][1] - board.columns[col][0]) {
+                    printCard(board.cards[board.columns[col][0] + row]);
+                    more = true;
+                } else {
+                    std.debug.print("  ", .{});
+                }
+                std.debug.print(" ", .{});
+            }
+            std.debug.print("\n", .{});
+        }
+    }
+
+    /// Check if the given move is valid in the current board state.
+    pub fn isValidMove(board: *const Board, move: Move) bool {
+        const from = move.from;
+        const to = move.to;
+
+        if (from == to)
+            return false;
+
+        const c = board.cardInSlot(from);
+        if (c == CARD_NONE)
+            return false;
+
+        const target = board.cardInSlot(to);
+
+        if (to < NUM_COLUMNS) {
+            // Destination is column - either empty or can move if alternating color and descending rank
+            return target == CARD_NONE or canMoveBelow(c, target);
+        } else if (to < NUM_COLUMNS + 4) {
+            // Destination is free cell - must be empty
+            return target == CARD_NONE;
+        } else {
+            // Destination is foundation pile
+            const pile_index = to - NUM_COLUMNS - 4;
+            const card_rank = c & 0b0000_1111;
+            const card_suit_bits = c & 0b1100_0000;
+            return (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6)));
+        }
+    }
+
+    /// Find all valid moves (from any slot to any other slot).
+    pub fn findValidMoves(board: *const Board, buffer: []Move) []Move {
+        var count: usize = 0;
+
+        // Check source slots: columns and free cells (0-11)
+        var from: u8 = 0;
+        while (from < NUM_COLUMNS + 4) : (from += 1) {
+            const c = board.cardInSlot(from);
+            if (c == CARD_NONE) continue;
+
+            // Check all destination slots (columns, free cells, foundation)
+            var to: u8 = 0;
+            // For free cells and free columns, generate only one move to avoid duplicates
+            var free_cell_move_generated = false;
+            var free_column_move_generated = false;
+
+            while (to < NUM_COLUMNS + 8) : (to += 1) {
+                if (from == to) continue;
+
+                const target = board.cardInSlot(to);
+                var is_valid = false;
+
+                if (to < NUM_COLUMNS) {
+                    if ((target == CARD_NONE and !free_column_move_generated) or (target != CARD_NONE and canMoveBelow(c, target))) {
+                        is_valid = true;
+                        if (target == CARD_NONE) {
+                            free_column_move_generated = true;
+                        }
+                    }
+                } else if (to < NUM_COLUMNS + 4) {
+                    if (target == CARD_NONE and !free_cell_move_generated) {
+                        is_valid = true;
+                        free_cell_move_generated = true;
+                    }
+                } else {
+                    const pile_index = to - NUM_COLUMNS - 4;
+                    const card_rank = c & 0b0000_1111;
+                    const card_suit_bits = c & 0b1100_0000;
+                    if (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6))) {
+                        is_valid = true;
+                    }
+                }
+
+                if (is_valid) {
+                    if (count < buffer.len) {
+                        buffer[count] = Move{ .from = from, .to = to };
+                        count += 1;
+                    } else {
+                        @panic("findValidMoves: insufficient buffer space");
+                    }
+                }
+            }
+        }
+
+        return buffer[0..count];
+    }
+
+    /// The "anchor card" is the rear-most card in a column, i.e., the card that is hardest to move.
+    pub fn anchorCard(board: *const Board, col: u8) Card {
+        if (board.columns[col][0] < board.columns[col][1]) {
+            return board.cards[board.columns[col][0]];
+        } else {
+            return CARD_NONE;
+        }
+    }
+
+    /// Check if the columns are sorted w.r.t. their anchor cards
+    pub fn columnsAreSorted(board: *const Board) bool {
+        for (0..NUM_COLUMNS - 1) |col| {
+            const j: u8 = @intCast(col);
+            if (board.anchorCard(j) > board.anchorCard(j + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /// Sort the columns w.r.t. their anchor cards.
+    /// Only updates the column slices; does not change the memory layout of the cards.
+    pub fn sortColumns(board: *Board) void {
+        for (0..NUM_COLUMNS) |i| {
+            for (0..NUM_COLUMNS - 1 - i) |jj| {
+                const j: u8 = @intCast(jj);
+                if (board.anchorCard(j) > board.anchorCard(j + 1)) {
+                    const temp = board.columns[j];
+                    board.columns[j] = board.columns[j + 1];
+                    board.columns[j + 1] = temp;
+                }
+            }
+        }
+    }
+
+    /// Compute hash of the board state. Is invariant to different memory representations of the same logical state.
+    pub fn hash(board: *const Board) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(&board.cells);
+        hasher.update(&board.piles);
+        const delimiter = [1]u8{0xFF};
+        for (board.columns) |col| {
+            const start = col[0];
+            const end = col[1];
+            if (start < end) {
+                hasher.update(board.cards[start..end]);
+            }
+            hasher.update(&delimiter);
+        }
+        return hasher.final();
+    }
+};
 
 // ============================================================================
 // Unit Tests
 // ============================================================================
-
-test "makeCard and basic card properties" {
-    const card_h5 = makeCard(Suit.Hearts, 5);
-    const card_s1 = makeCard(Suit.Spades, 1);
-    const card_d13 = makeCard(Suit.Diamonds, 13);
-    const card_c10 = makeCard(Suit.Clubs, 10);
-
-    // Verify card creation
-    try std.testing.expect(card_h5 & 0b0000_1111 == 5);
-    try std.testing.expect(card_s1 & 0b0000_1111 == 1);
-    try std.testing.expect(card_d13 & 0b0000_1111 == 13);
-    try std.testing.expect(card_c10 & 0b0000_1111 == 10);
-}
-
-test "color function - red cards" {
-    const hearts_5 = makeCard(Suit.Hearts, 5);
-    const diamonds_10 = makeCard(Suit.Diamonds, 10);
-
-    try std.testing.expect(color(hearts_5) == RED_BIT);
-    try std.testing.expect(color(diamonds_10) == RED_BIT);
-}
-
-test "color function - black cards" {
-    const spades_5 = makeCard(Suit.Spades, 5);
-    const clubs_10 = makeCard(Suit.Clubs, 10);
-
-    try std.testing.expect(color(spades_5) == 0);
-    try std.testing.expect(color(clubs_10) == 0);
-}
-
-test "suitIndex function" {
-    try std.testing.expect(suitIndex(Suit.Spades) == 0);
-    try std.testing.expect(suitIndex(Suit.Clubs) == 1);
-    try std.testing.expect(suitIndex(Suit.Hearts) == 2);
-    try std.testing.expect(suitIndex(Suit.Diamonds) == 3);
-}
-
-test "canMoveBelow - valid moves" {
-    const red_5 = makeCard(Suit.Hearts, 5);
-    const black_6 = makeCard(Suit.Spades, 6);
-    const red_6 = makeCard(Suit.Diamonds, 6);
-
-    // Can move red 5 below black 6
-    try std.testing.expect(canMoveBelow(red_5, black_6) == true);
-    // Can move black 5 below red 6
-    const black_5 = makeCard(Suit.Clubs, 5);
-    try std.testing.expect(canMoveBelow(black_5, red_6) == true);
-}
-
-test "canMoveBelow - invalid moves (same color)" {
-    const red_5 = makeCard(Suit.Hearts, 5);
-    const red_6 = makeCard(Suit.Diamonds, 6);
-
-    try std.testing.expect(canMoveBelow(red_5, red_6) == false);
-}
-
-test "canMoveBelow - invalid moves (wrong rank)" {
-    const red_5 = makeCard(Suit.Hearts, 5);
-    const black_7 = makeCard(Suit.Spades, 7);
-
-    try std.testing.expect(canMoveBelow(red_5, black_7) == false);
-}
-
-test "canMoveBelow - with Ace and King" {
-    const black_ace = makeCard(Suit.Spades, 1);
-    const red_2 = makeCard(Suit.Hearts, 2);
-    const red_king = makeCard(Suit.Diamonds, 13);
-
-    try std.testing.expect(canMoveBelow(black_ace, red_2) == true);
-    try std.testing.expect(canMoveBelow(red_king, black_ace) == false);
-}
 
 test "Board.init - distributes cards correctly" {
     var deck = makeDeck();
@@ -323,74 +589,6 @@ test "Board - complex scenario: move cards between free cells and foundation" {
     try std.testing.expect(board.cells[0] == CARD_NONE);
     try std.testing.expect(board.piles[2] == 1);
     try std.testing.expect(board.cardInSlot(14) == makeCard(Suit.Hearts, 1));
-}
-
-test "rankName function" {
-    try std.testing.expect(rankName(1) == 'A');
-    try std.testing.expect(rankName(10) == '0');
-    try std.testing.expect(rankName(11) == 'J');
-    try std.testing.expect(rankName(12) == 'Q');
-    try std.testing.expect(rankName(13) == 'K');
-    try std.testing.expect(rankName(2) == '2');
-    try std.testing.expect(rankName(9) == '9');
-}
-
-test "suitString function" {
-    try std.testing.expectEqualSlices(u8, suitString(Suit.Spades), "S");
-    try std.testing.expectEqualSlices(u8, suitString(Suit.Clubs), "C");
-    try std.testing.expectEqualSlices(u8, suitString(Suit.Hearts), "H");
-    try std.testing.expectEqualSlices(u8, suitString(Suit.Diamonds), "D");
-}
-
-test "makeDeck - creates full deck of 52 cards" {
-    const deck = makeDeck();
-
-    // Verify we have 52 cards
-    var filled_count: usize = 0;
-    for (deck) |card| {
-        if (card != CARD_NONE) {
-            filled_count += 1;
-        }
-    }
-    try std.testing.expect(filled_count == 52);
-}
-
-test "makeDeck - all suits present" {
-    const deck = makeDeck();
-
-    var suit_counts: [4]u8 = .{ 0, 0, 0, 0 };
-    for (deck) |card| {
-        const suit = suitIndex(@as(Suit, @enumFromInt(card & 0b1100_0000)));
-        suit_counts[suit] += 1;
-    }
-
-    // Each suit should have exactly 13 cards
-    for (suit_counts) |count| {
-        try std.testing.expect(count == 13);
-    }
-}
-
-test "makeDeck - all ranks present in each suit" {
-    const deck = makeDeck();
-
-    var ranks_per_suit: [4][14]bool = .{ .{false} ** 14, .{false} ** 14, .{false} ** 14, .{false} ** 14 };
-
-    for (deck) |card| {
-        const suit = suitIndex(@as(Suit, @enumFromInt(card & 0b1100_0000)));
-        const rank = card & 0b0000_1111;
-        ranks_per_suit[suit][rank] = true;
-    }
-
-    // Each suit should have ranks 1-13 (skip 0 and 14)
-    for (ranks_per_suit) |ranks| {
-        for (1..14) |rank| {
-            try std.testing.expect(ranks[rank] == true);
-        }
-    }
-}
-
-test "CARD_NONE constant" {
-    try std.testing.expect(CARD_NONE == 0);
 }
 
 test "Board initialization idempotent" {
@@ -715,7 +913,7 @@ test "Board.hash - identical setup after move sequence" {
     try std.testing.expect(hash_after_move != hash_initial);
 
     // Undo the move by moving from first free cell back to column
-    if (freecell.KEEP_FREECELLS_SORTED) {
+    if (KEEP_FREECELLS_SORTED) {
         board.makeMove(.{ .from = 11, .to = 0 });
     } else {
         board.makeMove(.{ .from = 8, .to = 0 });
@@ -782,7 +980,7 @@ test "Board.hash - card movement detection" {
 
     // Verify hashes are different
     try std.testing.expect(hash_after_move != hash_initial);
-    try std.testing.expect(board.cells[if (freecell.KEEP_FREECELLS_SORTED) 3 else 0] == card_col0);
+    try std.testing.expect(board.cells[if (KEEP_FREECELLS_SORTED) 3 else 0] == card_col0);
 }
 
 test "Board.hash - reallocate columns preserves hash" {
