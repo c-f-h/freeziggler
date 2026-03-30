@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const verbose = false;
+const verbose = true;
 
 pub const KEEP_FREECELLS_SORTED = true; // If true, keeps free cells sorted by card value to deduplicate equivalent states
 pub const KEEP_COLUMNS_SORTED = true; // If true, keeps columns sorted by anchor card (rear-most) to deduplicate equivalent states
@@ -122,6 +122,29 @@ pub const Board = struct {
         var idx: u8 = 0;
         while (idx < 52) : (idx += 1) {
             board.cards[idx] = deck[idx];
+        }
+        if (KEEP_COLUMNS_SORTED) {
+            board.sortColumns();
+        }
+        return board;
+    }
+
+    pub fn initFromColumns(columns: [NUM_COLUMNS][]Card) Board {
+        var board: Board = .{};
+        var idx: u8 = 0;
+        var j: u8 = 0;
+        while (j < NUM_COLUMNS) : (j += 1) {
+            const col = columns[j];
+            board.columns[j][0] = idx;
+            for (col) |card| {
+                if (idx < TABLEAU_SIZE) {
+                    board.cards[idx] = card;
+                    idx += 1;
+                } else {
+                    @panic("Too many cards in tableau");
+                }
+            }
+            board.columns[j][1] = idx;
         }
         if (KEEP_COLUMNS_SORTED) {
             board.sortColumns();
@@ -296,6 +319,36 @@ pub const Board = struct {
                 std.debug.print(" ", .{});
             }
             std.debug.print("\n", .{});
+        }
+    }
+
+    pub fn isValidMove(board: *const Board, move: Move) bool {
+        const from = move.from;
+        const to = move.to;
+
+        if (from == to)
+            return false;
+
+        const card = board.cardInSlot(from);
+        if (card == CARD_NONE)
+            return false;
+
+        const target = board.cardInSlot(to);
+
+        if (to < NUM_COLUMNS) {
+            // Destination is column - either empty or can move if alternating color and descending rank
+            return target == CARD_NONE or canMoveBelow(card, target);
+        } else if (to < NUM_COLUMNS + 4) {
+            // Destination is free cell - must be empty
+            return target == CARD_NONE;
+        } else {
+            // Destination is foundation pile
+            const pile_index = to - NUM_COLUMNS - 4;
+            const card_rank = card & 0b0000_1111;
+            const card_suit_bits = card & 0b1100_0000;
+
+            // Can move if the card rank is one more than current pile top and suits match
+            return (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6)));
         }
     }
 
@@ -535,8 +588,6 @@ fn solveAStar(starting_board: *Board, visited: *std.AutoHashMap(u64, void), allo
 
         // Check if we've already won
         if (isWon(board)) {
-            if (verbose)
-                std.debug.print("Found winning board at iteration {d}!\n", .{num_iter});
             solution_hash = cur_hash;
             break;
         }
@@ -716,10 +767,75 @@ fn printMoves(moves: []const Move) void {
     }
 }
 
+const example_json =
+    \\[
+    \\  [ "12_s", "6_d", "9_s", "9_c", "5_c", "12_d", "7_d" ],
+    \\  [ "1_c", "2_s", "10_s", "1_d", "13_s", "4_h", "6_c" ],
+    \\  [ "5_h", "11_c", "13_c", "3_h", "13_h", "2_c", "10_c" ],
+    \\  [ "7_s", "7_h", "9_d", "5_s", "11_d", "11_h", "3_s" ],
+    \\  [ "4_s", "6_s", "8_d", "1_s", "8_s", "11_s" ],
+    \\  [ "10_h", "10_d", "3_c", "6_h", "7_c", "8_c" ],
+    \\  [ "2_d", "4_c", "9_h", "8_h", "12_c", "4_d" ],
+    \\  [ "2_h", "5_d", "13_d", "3_d", "1_h", "12_h" ]
+    \\]
+;
+
+pub fn parseCardString(s: []const u8) !Card {
+    const rank_part = s[0 .. s.len - 2];
+    const suit_part = s[s.len - 1];
+
+    const rank: u8 = try std.fmt.parseInt(u8, rank_part, 10);
+    const suit =
+        try switch (suit_part) {
+            's' => Suit.Spades,
+            'c' => Suit.Clubs,
+            'h' => Suit.Hearts,
+            'd' => Suit.Diamonds,
+            else => error.InvalidCardString,
+        };
+
+    return makeCard(suit, rank);
+}
+
+pub fn parseJsonGame(allocator: std.mem.Allocator) !Board {
+    const input_data = std.json.parseFromSlice([][][]u8, allocator, example_json, .{}) catch |err| {
+        std.debug.print("Failed to parse JSON game: {s}\n", .{@errorName(err)});
+        return err;
+    };
+    if (input_data.value.len != NUM_COLUMNS) {
+        std.debug.print("Invalid JSON game: expected {d} columns, got {d}\n", .{ NUM_COLUMNS, input_data.value.len });
+        return error.InvalidJsonGame;
+    }
+    var card_buffer: [52]Card = undefined;
+    var idx: u8 = 0;
+    var columns: [NUM_COLUMNS][]Card = undefined;
+    for (input_data.value, 0..) |column, j| {
+        const col_start = idx;
+        for (column) |card_str| {
+            const card = parseCardString(card_str) catch |err| {
+                std.debug.print("Failed to parse card string '{s}': {s}\n", .{ card_str, @errorName(err) });
+                return err;
+            };
+            if (idx >= card_buffer.len) {
+                std.debug.print("Too many cards in JSON game: exceeded {d}\n", .{card_buffer.len});
+                return error.InvalidJsonGame;
+            }
+            card_buffer[idx] = card;
+            idx += 1;
+        }
+        columns[j] = card_buffer[col_start..idx];
+    }
+    var board = Board.initFromColumns(columns);
+    board.reallocateColumns();
+    return board;
+}
+
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
+
+    const input_board = try parseJsonGame(allocator);
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buf);
@@ -727,17 +843,16 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 0;
+    var seed: u32 = 29;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 30) : (seed += 1) {
-        const board = createRandomBoard(seed);
+        //const board = createRandomBoard(seed);
+        const board = input_board;
 
         if (verbose) {
             std.debug.print("Initial board state (seed {d}):\n", .{seed});
             board.print();
-
-            // Now try to solve it
             std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
         }
 
@@ -751,27 +866,20 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, path_length, iters });
 
             if (found) {
-                // Show first 20 moves of solution
-                std.debug.print("SUCCESS! Puzzle solved!\n", .{});
-
-                std.debug.print("\nFirst 20 moves of solution:\n", .{});
-                for (solution_path.items()[0..@min(20, path_length)], 0..) |move, i| {
-                    std.debug.print("  {d}: slot {d} -> slot {d}\n", .{ i + 1, move.from, move.to });
-                }
-                if (path_length > 20) {
-                    std.debug.print("  ... and {d} more moves\n", .{path_length - 20});
-                }
-
                 // Verify solution
                 var verify_board = board;
-                for (solution_path.items()) |move| {
+                for (solution_path.items, 0..) |move, i| {
+                    std.debug.print("  {d:>3}: slot {d:>2} -> slot {d:>2}    {s}\n", .{ i + 1, move.from, move.to, cardName(verify_board.cardInSlot(move.from)) });
+                    if (!verify_board.isValidMove(move)) {
+                        std.debug.print("    INVALID MOVE!\n", .{});
+                        break;
+                    }
                     verify_board.makeMove(move);
                 }
                 std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
             } else {
-                std.debug.print("FAIL! Could not solve puzzle.\n", .{});
+                std.debug.print("FAIL! Could not solve board.\n", .{});
                 std.debug.print("Foundation piles: {} {} {} {}\n", .{ board.piles[0], board.piles[1], board.piles[2], board.piles[3] });
-                break;
             }
         } else {
             try stdout.print(" {d:04}: {} {d:>5} {d:>7}\n", .{ seed, found, path_length, iters });
