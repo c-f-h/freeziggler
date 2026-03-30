@@ -213,6 +213,25 @@ test "Board.columnIsFull - after filling" {
     try std.testing.expect(board.columnIsFull(0));
 }
 
+test "Board.columnIsFull - independent of logical column order" {
+    var board = Board{
+        .columns = .{
+            .{ 10, 13 },
+            .{ 30, 35 },
+            .{ 13, 20 },
+            .{ 40, 44 },
+            .{ 44, 48 },
+            .{ 48, 52 },
+            .{ 52, 56 },
+            .{ 56, 60 },
+        },
+    };
+
+    // Column 0 would overwrite column 2 if extended, even though column 1 is far away.
+    try std.testing.expect(board.columnIsFull(0));
+    try std.testing.expect(!board.columnIsFull(1));
+}
+
 test "Board.reallocateColumns - preserves all cards" {
     var deck = makeDeck();
     var board = Board.init(&deck);

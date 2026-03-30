@@ -3,6 +3,7 @@ const std = @import("std");
 const verbose = false;
 
 pub const KEEP_FREECELLS_SORTED = true; // If true, keeps free cells sorted by card value to deduplicate equivalent states
+pub const KEEP_COLUMNS_SORTED = true; // If true, keeps columns sorted by anchor card (rear-most) to deduplicate equivalent states
 
 const heuristic = heuristic_numNonMatching;
 
@@ -122,6 +123,9 @@ pub const Board = struct {
         while (idx < 52) : (idx += 1) {
             board.cards[idx] = deck[idx];
         }
+        if (KEEP_COLUMNS_SORTED) {
+            board.sortColumns();
+        }
         return board;
     }
 
@@ -162,11 +166,28 @@ pub const Board = struct {
 
     /// Checks if the column is full (i.e., has no free spaces for moving cards into it
     pub fn columnIsFull(board: *const Board, column: u8) bool {
-        if (column == NUM_COLUMNS - 1) {
-            return board.columns[column][1] == TABLEAU_SIZE;
-        } else {
-            return board.columns[column][1] == board.columns[column + 1][0];
+
+        // Original implementation: relies on columns being stored in increasing order
+        //if (column == NUM_COLUMNS - 1) {
+        //    return board.columns[column][1] == TABLEAU_SIZE;
+        //} else {
+        //    return board.columns[column][1] == board.columns[column + 1][0];
+        //}
+
+        const next_idx = board.columns[column][1];
+        if (next_idx >= TABLEAU_SIZE) {
+            return true;
         }
+
+        // A column is full when extending it would overwrite any occupied tableau slot.
+        for (board.columns, 0..) |other_col, i| {
+            if (i == column) continue;
+            if (other_col[0] <= next_idx and next_idx < other_col[1]) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// Guarantees that there are free spaces between columns for moving cards around
@@ -235,6 +256,10 @@ pub const Board = struct {
         const card = board.takeCardFromSlot(move.from);
         if (card == CARD_NONE) @panic("invalid move"); // No card to move
         board.putCardInSlot(move.to, card);
+
+        if (KEEP_COLUMNS_SORTED and !board.columnsAreSorted()) {
+            board.sortColumns();
+        }
     }
 
     pub fn print(board: *const Board) void {
@@ -337,6 +362,40 @@ pub const Board = struct {
         }
 
         return buffer[0..count];
+    }
+
+    /// The "anchor card" is the rear-most card in a column, i.e., the card that is hardest to move.
+    pub fn anchorCard(board: *const Board, col: u8) Card {
+        if (board.columns[col][0] < board.columns[col][1]) {
+            return board.cards[board.columns[col][0]];
+        } else {
+            return CARD_NONE;
+        }
+    }
+
+    /// Check if the columns are sorted w.r.t. their anchor cards
+    pub fn columnsAreSorted(board: *const Board) bool {
+        for (0..NUM_COLUMNS - 1) |col| {
+            const j: u8 = @intCast(col);
+            if (board.anchorCard(j) > board.anchorCard(j + 1)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    pub fn sortColumns(board: *Board) void {
+        // Simple bubble sort since NUM_COLUMNS is small
+        for (0..NUM_COLUMNS) |i| {
+            for (0..NUM_COLUMNS - 1 - i) |jj| {
+                const j: u8 = @intCast(jj);
+                if (board.anchorCard(j) > board.anchorCard(j + 1)) {
+                    const temp = board.columns[j];
+                    board.columns[j] = board.columns[j + 1];
+                    board.columns[j + 1] = temp;
+                }
+            }
+        }
     }
 
     /// Returns a hash of the board state for use in hash maps or detecting duplicate positions
@@ -668,7 +727,7 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 14;
+    var seed: u32 = 0;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 17) : (seed += 1) {
