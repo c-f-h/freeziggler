@@ -12,10 +12,6 @@ const makeCard = board_mod.makeCard;
 
 pub const Path = std.ArrayList(Move);
 
-pub fn isWon(board: *const Board) bool {
-    return board.piles[0] == 13 and board.piles[1] == 13 and board.piles[2] == 13 and board.piles[3] == 13;
-}
-
 const heuristic = heuristic_numNonMatching;
 
 fn heuristic_numBlocked(board: *const Board) u16 {
@@ -115,7 +111,7 @@ fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path)
 
         const board = &cur_node.board;
 
-        if (isWon(board)) {
+        if (board.isWon()) {
             solution_hash = cur_hash;
             break;
         }
@@ -131,7 +127,7 @@ fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path)
 
         for (valid_moves) |move| {
             var new_board = board.*;
-            new_board.makeMove(move, false);
+            new_board.makeMove(move);
 
             const new_hash = new_board.hash();
             const new_cost = cur_node.best_cost + 1;
@@ -185,7 +181,7 @@ fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
 }
 
 fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
-    if (isWon(board)) {
+    if (board.isWon()) {
         return true;
     }
 
@@ -200,7 +196,7 @@ fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.
 
     for (valid_moves) |move| {
         var new_board = board.*;
-        new_board.makeMove(move, false);
+        new_board.makeMove(move);
         if (try solveDFS(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
@@ -212,7 +208,7 @@ fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.
 
 fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
     const DFS_BUFFER_SIZE = 512;
-    if (isWon(board)) {
+    if (board.isWon()) {
         return true;
     }
 
@@ -231,7 +227,7 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
 
     for (valid_moves, 0..) |move, i| {
         var new_board = board.*;
-        new_board.makeMove(move, false);
+        new_board.makeMove(move);
         move_heuristic[i] = MovePair{ .move = move, .heuristic = heuristic(&new_board) };
     }
 
@@ -240,7 +236,7 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
     for (move_heuristic) |*move_pair| {
         const move = move_pair.move;
         var new_board = board.*;
-        new_board.makeMove(move, false);
+        new_board.makeMove(move);
         if (try solveBestFirstSearch(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
@@ -296,7 +292,7 @@ pub fn remapPath(original_board: *const Board, remapped_board: *const Board, pat
         if (!orig.isValidMove(orig_move)) @panic("Invalid move in original board");
         orig_path.len += 1;
         orig_path.*[orig_path.len - 1] = orig_move;
-        orig.makeMove(orig_move, true);
-        remapped.makeMove(move, false);
+        orig.makeMove_noSorting(orig_move);
+        remapped.makeMove(move);
     }
 }

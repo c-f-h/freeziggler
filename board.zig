@@ -4,16 +4,15 @@ const card_mod = @import("card.zig");
 const Card = card_mod.Card;
 const CARD_NONE = card_mod.CARD_NONE;
 const Suit = card_mod.Suit;
-const RED_BIT = card_mod.RED_BIT;
 const color = card_mod.color;
 const makeCard = card_mod.makeCard;
 const canMoveBelow = card_mod.canMoveBelow;
-const bubbleIntoPlace = card_mod.bubbleIntoPlace;
 const printCard = card_mod.printCard;
-const makeDeck = card_mod.makeDeck;
 
 pub const NUM_COLUMNS = 8;
 pub const TABLEAU_SIZE = 64;
+
+pub var num_reallocations: u64 = 0;
 
 pub const Move = struct {
     from: u8,
@@ -26,6 +25,20 @@ pub const KEEP_FREECELLS_SORTED = true;
 /// If true, keeps columns sorted by anchor card (rear-most) to deduplicate equivalent states
 pub const KEEP_COLUMNS_SORTED = true;
 
+fn bubbleIntoPlace(arr: *[4]u8, index: u8) void {
+    var i = index;
+    while (i > 0 and arr[i - 1] > arr[i]) : (i -= 1) {
+        const temp = arr[i - 1];
+        arr[i - 1] = arr[i];
+        arr[i] = temp;
+    }
+    while (i < 3 and arr[i + 1] < arr[i]) : (i += 1) {
+        const temp = arr[i + 1];
+        arr[i + 1] = arr[i];
+        arr[i] = temp;
+    }
+}
+
 pub const Board = struct {
     cells: [4]Card = [_]Card{CARD_NONE} ** 4,
     piles: [4]u8 = [_]u8{0} ** 4,
@@ -37,9 +50,6 @@ pub const Board = struct {
         var idx: u8 = 0;
         while (idx < 52) : (idx += 1) {
             board.cards[idx] = deck[idx];
-        }
-        if (KEEP_COLUMNS_SORTED) {
-            board.sortColumns();
         }
         return board;
     }
@@ -137,6 +147,10 @@ pub const Board = struct {
         return 52 - board.piles[0] - board.piles[1] - board.piles[2] - board.piles[3];
     }
 
+    pub fn isWon(board: *const Board) bool {
+        return board.piles[0] == 13 and board.piles[1] == 13 and board.piles[2] == 13 and board.piles[3] == 13;
+    }
+
     pub fn columnIsFull(board: *const Board, column: u8) bool {
         // NB: This implementation does not rely on the order in which the columns are stored, since
         // we want to be able to reorder the columns.
@@ -169,6 +183,7 @@ pub const Board = struct {
             @memcpy(board.cards[col[0]..col[1]], old_cards[old_columns[j][0]..old_columns[j][1]]);
             idx = col[1] + free_per_column;
         }
+        num_reallocations += 1;
     }
 
     pub fn takeCardFromSlot(board: *Board, slot: u8, no_sorting: bool) Card {
@@ -207,14 +222,21 @@ pub const Board = struct {
     }
 
     /// Make the given move. This may reorder the free cells or columns.
-    pub fn makeMove(board: *Board, move: Move, no_sorting: bool) void {
-        const c = board.takeCardFromSlot(move.from, no_sorting);
+    pub fn makeMove(board: *Board, move: Move) void {
+        const c = board.takeCardFromSlot(move.from, false);
         if (c == CARD_NONE) @panic("invalid move");
-        board.putCardInSlot(move.to, c, no_sorting);
+        board.putCardInSlot(move.to, c, false);
 
-        if (KEEP_COLUMNS_SORTED and !no_sorting and !board.columnsAreSorted()) {
+        if (KEEP_COLUMNS_SORTED and !board.columnsAreSorted()) {
             board.sortColumns();
         }
+    }
+
+    /// Make the given move. This may reorder the free cells or columns.
+    pub fn makeMove_noSorting(board: *Board, move: Move) void {
+        const c = board.takeCardFromSlot(move.from, true);
+        if (c == CARD_NONE) @panic("invalid move");
+        board.putCardInSlot(move.to, c, true);
     }
 
     pub fn print(board: *const Board) void {
@@ -392,6 +414,8 @@ pub const Board = struct {
 // ============================================================================
 // Unit Tests
 // ============================================================================
+
+const makeDeck = card_mod.makeDeck;
 
 test "Board.init - distributes cards correctly" {
     var deck = makeDeck();

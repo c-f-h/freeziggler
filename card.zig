@@ -72,20 +72,6 @@ pub fn printCard(card: Card) void {
     std.debug.print("{s}{c}", .{ suitString(suit), rankName(rank) });
 }
 
-pub fn bubbleIntoPlace(arr: *[4]u8, index: u8) void {
-    var i = index;
-    while (i > 0 and arr[i - 1] > arr[i]) : (i -= 1) {
-        const temp = arr[i - 1];
-        arr[i - 1] = arr[i];
-        arr[i] = temp;
-    }
-    while (i < 3 and arr[i + 1] < arr[i]) : (i += 1) {
-        const temp = arr[i + 1];
-        arr[i + 1] = arr[i];
-        arr[i] = temp;
-    }
-}
-
 var str_buffer: [8]u8 = undefined;
 
 pub fn cardName(card: Card) []const u8 {

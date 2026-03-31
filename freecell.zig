@@ -8,16 +8,11 @@ const game = @import("game.zig");
 const Board = board.Board;
 const Move = board.Move;
 const Card = board.Card;
-const CARD_NONE = card.CARD_NONE;
-const canMoveBelow = board.canMoveBelow;
 const cardName = card.cardName;
-const isWon = solver.isWon;
 const solveFreeCell = solver.solveFreeCell;
 const Path = solver.Path;
 
 const verbose = true;
-
-var num_reallocations: u64 = 0;
 
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -43,7 +38,7 @@ pub fn main(init: std.process.Init) !void {
         game_board.reallocateColumns();
 
         if (verbose) {
-            std.debug.print("Initial board state (seed {d}):\n", .{seed});
+            std.debug.print("Initial board state:\n", .{});
             input_board.print();
             std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
         }
@@ -69,9 +64,9 @@ pub fn main(init: std.process.Init) !void {
                         std.debug.print("    INVALID MOVE!\n", .{});
                         break;
                     }
-                    verify_board.makeMove(move, true);
+                    verify_board.makeMove_noSorting(move);
                 }
-                std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
+                std.debug.print("\nVerification: Final board is solved: {}\n", .{verify_board.isWon()});
             } else {
                 std.debug.print("FAIL! Could not solve board.\n", .{});
                 std.debug.print("Foundation piles: {} {} {} {}\n", .{ game_board.piles[0], game_board.piles[1], game_board.piles[2], game_board.piles[3] });
@@ -84,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
         _ = arena.reset(std.heap.ArenaAllocator.ResetMode.retain_capacity);
     }
     const time_end = std.Io.Clock.now(std.Io.Clock.real, init.io);
-    try stdout.print("Total path length: {}, total iterations: {}, reallocs: {}\n", .{ total_length, total_iters, num_reallocations });
+    try stdout.print("Total path length: {}, total iterations: {}, reallocs: {}\n", .{ total_length, total_iters, board.num_reallocations });
     try stdout.print("Total time: {} ms\n", .{@as(f64, @floatFromInt(time_end.toMicroseconds() - time_start.toMicroseconds())) / 1000.0});
     try stdout.flush();
 }

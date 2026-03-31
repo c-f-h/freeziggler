@@ -22,6 +22,9 @@ pub fn createRandomBoard(seed: u64) Board {
     var deck = makeDeck();
     std.Random.shuffle(rng.random(), u8, &deck);
     var board = Board.init(&deck);
+    if (board_mod.KEEP_COLUMNS_SORTED) {
+        board.sortColumns();
+    }
     board.reallocateColumns();
     return board;
 }
