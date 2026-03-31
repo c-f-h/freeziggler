@@ -322,6 +322,11 @@ pub const Board = struct {
             while (to < NUM_COLUMNS + 8) : (to += 1) {
                 if (from == to) continue;
 
+                // disallow moves from free cell to another free cell
+                if (from >= NUM_COLUMNS and from < NUM_COLUMNS + 4 and to >= NUM_COLUMNS and to < NUM_COLUMNS + 4) {
+                    continue;
+                }
+
                 const target = board.cardInSlot(to);
                 var is_valid = false;
 
