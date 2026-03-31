@@ -262,6 +262,136 @@ fn printMoves(moves: []const Move) void {
     }
 }
 
+fn printPathBackwards(nodes: *const std.AutoHashMap(u64, AStarNode), current_hash: u64) void {
+    var hash = current_hash;
+    while (true) {
+        const node = nodes.getPtr(hash) orelse break;
+        if (node.parent_hash == 0) break;
+        std.debug.print("  slot {d:>2} -> slot {d:>2}, cost: {d}, hash: {x}, heuristic: {d}\n", .{ node.move.from, node.move.to, node.best_cost, hash & 0xffff, node.heuristic_value });
+        hash = node.parent_hash;
+    }
+}
+
+pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocator) !void {
+    var known_nodes = std.AutoHashMap(u64, AStarNode).init(allocator);
+    defer known_nodes.deinit();
+
+    var path_hashes = try allocator.alloc(u64, path.len + 1);
+    defer allocator.free(path_hashes);
+
+    // init known nodes and path_hashes
+    {
+        var current_board = board.*;
+        var prev_hash: u64 = current_board.hash();
+
+        // insert a node for the original board state
+        try known_nodes.put(prev_hash, AStarNode{
+            .board = current_board,
+            .heuristic_value = 1, // 1 = node known to lead to a solution
+            .best_cost = 0,
+            .parent_hash = 0,
+            .move = Move{ .from = 0, .to = 0 },
+        });
+
+        // path_hashes[i] = hash of board state after making moves path[0..i]
+        path_hashes[0] = prev_hash;
+
+        // insert nodes for the current best known path
+        for (path, 1..) |move, state_index| {
+            current_board.makeMove(move);
+            const board_hash = current_board.hash();
+            path_hashes[state_index] = board_hash;
+
+            try known_nodes.put(board_hash, AStarNode{
+                .board = current_board,
+                .heuristic_value = 1, // node known to lead to a solution
+                .best_cost = @intCast(state_index),
+                .parent_hash = prev_hash,
+                .move = move,
+            });
+
+            prev_hash = board_hash;
+        }
+    }
+
+    var queue = try std.Deque(u64).initCapacity(allocator, 1024);
+    defer queue.deinit(allocator);
+
+    // seed breadth-first search from a subset of nodes on the known solution path
+    var i: usize = 0;
+    while (i < path_hashes.len) : (i += 5) {
+        try queue.pushFront(allocator, path_hashes[i]);
+    }
+
+    const NUM_ATTEMPTS = 10000000;
+    var attempts: u32 = NUM_ATTEMPTS;
+    var improved_node: u64 = 0;
+
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+
+    // use breadth-first search to try to find a shortcut to a node on the known solution path
+    outer_loop: while (attempts > 0) : (attempts -= 1) {
+        // pop a node from the queue and explore its neighbors
+        const cur_hash = queue.popBack() orelse break;
+        // NB: cannot use getPtr here as put() later on may invalidate the pointer
+        const cur_node = known_nodes.get(cur_hash) orelse @panic("Hash from queue not found in known nodes");
+        const cur_board = &cur_node.board;
+
+        if ((try visited.getOrPut(cur_hash)).found_existing) {
+            continue;
+        }
+
+        var move_buffer: [64]Move = undefined;
+        const valid_moves = cur_board.findValidMoves(&move_buffer);
+
+        for (valid_moves) |move| {
+            // compute board state and hash after move
+            var new_board = cur_board.*;
+            new_board.makeMove(move);
+            const new_hash = new_board.hash();
+
+            if (visited.contains(new_hash)) {
+                continue;
+            }
+
+            // have we seen this board state before?
+            if (known_nodes.getPtr(new_hash)) |existing| {
+                // already known node - check if this is a shorter path to a solution
+                if (cur_node.best_cost + 1 < existing.best_cost) {
+                    existing.best_cost = cur_node.best_cost + 1;
+                    existing.parent_hash = cur_hash;
+                    existing.move = move;
+
+                    if (existing.heuristic_value != 0) {
+                        std.debug.print("Found improved path to node with hash {x}: old cost = {d}, new cost = {d}\n", .{ new_hash & 0xffff, existing.best_cost, cur_node.best_cost + 1 });
+                        printPathBackwards(&known_nodes, new_hash);
+                        improved_node = new_hash;
+                        break :outer_loop;
+                    }
+                }
+            } else {
+                // new node - add to known nodes
+                try known_nodes.put(new_hash, AStarNode{
+                    .board = new_board,
+                    .heuristic_value = 0,
+                    .best_cost = cur_node.best_cost + 1,
+                    .parent_hash = cur_hash,
+                    .move = move,
+                });
+            }
+            try queue.pushFront(allocator, new_hash);
+        }
+    }
+
+    if (improved_node != 0) {
+        std.debug.print("Found improved path after {d} attempts\n", .{NUM_ATTEMPTS - attempts});
+    } else {
+        std.debug.print("No improved path found after {d} attempts\n", .{NUM_ATTEMPTS - attempts});
+        return;
+    }
+}
+
 /// Given the original and the sorted game board, remap the path for the sorted board back to the original board's column indices.
 pub fn remapPath(original_board: *const Board, remapped_board: *const Board, path: []Move, orig_path: *[]Move) void {
     if (orig_path.len < path.len) @panic("Real path buffer too small");

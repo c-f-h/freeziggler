@@ -45,12 +45,15 @@ pub fn main(init: std.process.Init) !void {
 
         var solution_path: Path = .empty;
         const found, const iters = try solveFreeCell(game_board, allocator, &solution_path);
-        const path_length = solution_path.items.len;
-        total_length += path_length;
+        total_length += solution_path.items.len;
         total_iters += iters;
 
+        //if (found) {
+        //    try solver.improvePath(&game_board, solution_path.items, allocator);
+        //}
+
+        const path_length = solution_path.items.len;
         var true_path = try allocator.alloc(Move, path_length);
-        defer allocator.free(true_path);
         solver.remapPath(&input_board, &game_board, solution_path.items, &true_path);
 
         if (verbose) {
