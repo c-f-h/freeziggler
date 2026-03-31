@@ -14,7 +14,6 @@ const cardName = card.cardName;
 const isWon = solver.isWon;
 const solveFreeCell = solver.solveFreeCell;
 const Path = solver.Path;
-const parseJsonGame = game.parseJsonGame;
 
 const verbose = true;
 
@@ -25,7 +24,7 @@ pub fn main(init: std.process.Init) !void {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const input_board = try parseJsonGame(allocator);
+    const input_board = try game.parseJsonGame(allocator);
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buf);
@@ -37,11 +36,15 @@ pub fn main(init: std.process.Init) !void {
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 30) : (seed += 1) {
-        const game_board = input_board;
+        var game_board = input_board;
+        if (board.KEEP_COLUMNS_SORTED) {
+            game_board.sortColumns();
+        }
+        game_board.reallocateColumns();
 
         if (verbose) {
             std.debug.print("Initial board state (seed {d}):\n", .{seed});
-            game_board.print();
+            input_board.print();
             std.debug.print("=== ATTEMPTING TO SOLVE ===\n", .{});
         }
 
@@ -51,18 +54,22 @@ pub fn main(init: std.process.Init) !void {
         total_length += path_length;
         total_iters += iters;
 
+        var true_path = try allocator.alloc(Move, path_length);
+        defer allocator.free(true_path);
+        solver.remapPath(&input_board, &game_board, solution_path.items, &true_path);
+
         if (verbose) {
             std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, path_length, iters });
 
             if (found) {
-                var verify_board = game_board;
-                for (solution_path.items, 0..) |move, i| {
+                var verify_board = input_board;
+                for (true_path, 0..) |move, i| {
                     std.debug.print("  {d:>3}: slot {d:>2} -> slot {d:>2}    {s}\n", .{ i + 1, move.from, move.to, cardName(verify_board.cardInSlot(move.from)) });
                     if (!verify_board.isValidMove(move)) {
                         std.debug.print("    INVALID MOVE!\n", .{});
                         break;
                     }
-                    verify_board.makeMove(move);
+                    verify_board.makeMove(move, true);
                 }
                 std.debug.print("\nVerification: Final board is solved: {}\n", .{isWon(&verify_board)});
             } else {

@@ -84,7 +84,5 @@ pub fn parseJsonGame(allocator: std.mem.Allocator) !Board {
         }
         columns[j] = card_buffer[col_start..idx];
     }
-    var board = Board.initFromColumns(columns);
-    board.reallocateColumns();
-    return board;
+    return Board.initFromColumns(columns);
 }

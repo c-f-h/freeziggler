@@ -18,12 +18,24 @@ pub const Suit = enum(u8) {
     Diamonds = RED_BIT | (1 << 6),
 };
 
-pub fn suitIndex(suit: Suit) usize {
+pub fn suitIndex(suit: Suit) u8 {
     return @intFromEnum(suit) >> 6;
 }
 
 pub fn makeCard(suit: Suit, rank: u8) Card {
     return @intFromEnum(suit) | rank;
+}
+
+pub fn cardSuit(card: Card) Suit {
+    return @enumFromInt(card & 0b1100_0000);
+}
+
+pub fn cardSuitIndex(card: Card) u8 {
+    return suitIndex(cardSuit(card));
+}
+
+pub fn cardRank(card: Card) u8 {
+    return card & 0b0000_1111;
 }
 
 pub fn suitString(suit: Suit) []const u8 {
@@ -47,9 +59,7 @@ pub fn rankName(rank: u8) u8 {
 }
 
 pub fn canMoveBelow(card: Card, target: Card) bool {
-    const cardRank = card & 0b0000_1111;
-    const targetRank = target & 0b0000_1111;
-    return (color(card) != color(target)) and (cardRank == targetRank - 1);
+    return (color(card) != color(target)) and (cardRank(card) == cardRank(target) - 1);
 }
 
 pub fn printCard(card: Card) void {

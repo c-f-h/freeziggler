@@ -61,9 +61,6 @@ pub const Board = struct {
             }
             board.columns[j][1] = idx;
         }
-        if (KEEP_COLUMNS_SORTED) {
-            board.sortColumns();
-        }
         return board;
     }
 
@@ -83,6 +80,45 @@ pub const Board = struct {
             }
         }
         return CARD_NONE;
+    }
+
+    pub fn findSlotContainingCard(board: *const Board, target: Card) ?u8 {
+        for (board.cells, 0..) |cell, i| {
+            if (cell == target) {
+                return NUM_COLUMNS + @as(u8, @intCast(i));
+            }
+        }
+
+        const suit = card_mod.suitIndex(card_mod.cardSuit(target));
+        if (board.piles[suit] == card_mod.cardRank(target)) {
+            return NUM_COLUMNS + 4 + suit;
+        }
+
+        for (board.columns, 0..) |col, j| {
+            const start = col[0];
+            const end = col[1];
+            if (start < end and board.cards[end - 1] == target)
+                return @truncate(j);
+        }
+        return null;
+    }
+
+    pub fn findEmptyColumn(board: *const Board) ?u8 {
+        for (board.columns, 0..) |col, j| {
+            if (col[0] == col[1]) {
+                return @truncate(j);
+            }
+        }
+        return null;
+    }
+
+    pub fn findEmptyFreeCell(board: *const Board) ?u8 {
+        for (board.cells, 0..) |cell, i| {
+            if (cell == CARD_NONE) {
+                return NUM_COLUMNS + @as(u8, @intCast(i));
+            }
+        }
+        return null;
     }
 
     pub fn numCardsInColumn(board: *const Board, column: u8) u8 {
@@ -135,7 +171,7 @@ pub const Board = struct {
         }
     }
 
-    pub fn takeCardFromSlot(board: *Board, slot: u8) Card {
+    pub fn takeCardFromSlot(board: *Board, slot: u8, no_sorting: bool) Card {
         const card = board.cardInSlot(slot);
         if (card == CARD_NONE) return CARD_NONE;
 
@@ -143,7 +179,7 @@ pub const Board = struct {
             board.columns[slot][1] -= 1;
         } else if (slot < NUM_COLUMNS + 4) {
             board.cells[slot - NUM_COLUMNS] = CARD_NONE;
-            if (KEEP_FREECELLS_SORTED)
+            if (KEEP_FREECELLS_SORTED and !no_sorting)
                 bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
         } else if (slot < NUM_COLUMNS + 8) {
             const pileIndex = slot - NUM_COLUMNS - 4;
@@ -153,7 +189,7 @@ pub const Board = struct {
         return card;
     }
 
-    pub fn putCardInSlot(board: *Board, slot: u8, c: Card) void {
+    pub fn putCardInSlot(board: *Board, slot: u8, c: Card, no_sorting: bool) void {
         if (slot < NUM_COLUMNS) {
             if (board.columnIsFull(slot)) {
                 board.reallocateColumns();
@@ -162,7 +198,7 @@ pub const Board = struct {
             board.columns[slot][1] += 1;
         } else if (slot < NUM_COLUMNS + 4) {
             board.cells[slot - NUM_COLUMNS] = c;
-            if (KEEP_FREECELLS_SORTED)
+            if (KEEP_FREECELLS_SORTED and !no_sorting)
                 bubbleIntoPlace(&board.cells, slot - NUM_COLUMNS);
         } else if (slot < NUM_COLUMNS + 8) {
             const pileIndex = slot - NUM_COLUMNS - 4;
@@ -171,12 +207,12 @@ pub const Board = struct {
     }
 
     /// Make the given move. This may reorder the free cells or columns.
-    pub fn makeMove(board: *Board, move: Move) void {
-        const c = board.takeCardFromSlot(move.from);
+    pub fn makeMove(board: *Board, move: Move, no_sorting: bool) void {
+        const c = board.takeCardFromSlot(move.from, no_sorting);
         if (c == CARD_NONE) @panic("invalid move");
-        board.putCardInSlot(move.to, c);
+        board.putCardInSlot(move.to, c, no_sorting);
 
-        if (KEEP_COLUMNS_SORTED and !board.columnsAreSorted()) {
+        if (KEEP_COLUMNS_SORTED and !no_sorting and !board.columnsAreSorted()) {
             board.sortColumns();
         }
     }
@@ -241,9 +277,7 @@ pub const Board = struct {
         } else {
             // Destination is foundation pile
             const pile_index = to - NUM_COLUMNS - 4;
-            const card_rank = c & 0b0000_1111;
-            const card_suit_bits = c & 0b1100_0000;
-            return (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6)));
+            return (card_mod.cardRank(c) == board.piles[pile_index] + 1 and card_mod.cardSuitIndex(c) == pile_index);
         }
     }
 
@@ -283,9 +317,7 @@ pub const Board = struct {
                     }
                 } else {
                     const pile_index = to - NUM_COLUMNS - 4;
-                    const card_rank = c & 0b0000_1111;
-                    const card_suit_bits = c & 0b1100_0000;
-                    if (card_rank == board.piles[pile_index] + 1 and card_suit_bits == @as(u8, @intCast(pile_index << 6))) {
+                    if (card_mod.cardRank(c) == board.piles[pile_index] + 1 and card_mod.cardSuitIndex(c) == pile_index) {
                         is_valid = true;
                     }
                 }
@@ -1279,4 +1311,150 @@ test "findValidMoves - sequence of valid descending moves" {
     }
     try std.testing.expect(found_move_0_1);
     try std.testing.expect(found_move_1_2);
+}
+
+// ============================================================================
+// findSlotContainingCard Tests
+// ============================================================================
+
+test "findSlotContainingCard - finds card in free cell" {
+    var board = Board{};
+    const test_card = makeCard(Suit.Hearts, 7);
+    board.cells[2] = test_card;
+
+    const slot = board.findSlotContainingCard(test_card);
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 10); // Slot 8 + 2
+}
+
+test "findSlotContainingCard - finds card at top of foundation pile" {
+    var board = Board{};
+    board.piles[1] = 5; // Clubs pile has 5 cards (top card is rank 5)
+
+    const test_card = makeCard(Suit.Clubs, 5);
+    const slot = board.findSlotContainingCard(test_card);
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 13); // NUM_COLUMNS + 4 + 1
+}
+
+test "findSlotContainingCard - finds ace at top of foundation" {
+    var board = Board{};
+    board.piles[0] = 1; // Spades pile has 1 card (the ace)
+
+    const test_card = makeCard(Suit.Spades, 1);
+    const slot = board.findSlotContainingCard(test_card);
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 12);
+}
+
+test "findSlotContainingCard - does not find card buried in foundation pile" {
+    var board = Board{};
+    board.piles[2] = 5; // Hearts pile has 5 cards
+
+    const test_card = makeCard(Suit.Hearts, 3); // Rank 3 is buried
+    const slot = board.findSlotContainingCard(test_card);
+
+    try std.testing.expect(slot == null);
+}
+
+test "findSlotContainingCard - finds card at top of column" {
+    var board = Board{};
+    board.columns[3] = .{ 0, 3 };
+    board.cards[0] = makeCard(Suit.Diamonds, 2);
+    board.cards[1] = makeCard(Suit.Hearts, 8);
+    board.cards[2] = makeCard(Suit.Spades, 6); // Top card
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Spades, 6));
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 3);
+}
+
+test "findSlotContainingCard - does not find card buried in column" {
+    var board = Board{};
+    board.columns[0] = .{ 0, 4 };
+    board.cards[0] = makeCard(Suit.Hearts, 3);
+    board.cards[1] = makeCard(Suit.Spades, 7);
+    board.cards[2] = makeCard(Suit.Clubs, 9);
+    board.cards[3] = makeCard(Suit.Hearts, 10); // Top card
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Hearts, 3));
+
+    try std.testing.expect(slot == null);
+}
+
+test "findSlotContainingCard - finds top card of first column" {
+    var board = Board{};
+    board.columns[0] = .{ 5, 8 };
+    board.cards[7] = makeCard(Suit.Hearts, 4); // Top card at index 7
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Hearts, 4));
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 0);
+}
+
+test "findSlotContainingCard - finds top card of last column" {
+    var board = Board{};
+    board.columns[7] = .{ 40, 45 };
+    board.cards[44] = makeCard(Suit.Clubs, 11);
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Clubs, 11));
+
+    try std.testing.expect(slot != null);
+    try std.testing.expect(slot.? == 7);
+}
+
+test "findSlotContainingCard - returns null for card not on board" {
+    var board = Board{};
+    board.cells[0] = makeCard(Suit.Hearts, 7);
+    board.columns[0] = .{ 0, 1 };
+    board.cards[0] = makeCard(Suit.Spades, 5);
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Diamonds, 13));
+
+    try std.testing.expect(slot == null);
+}
+
+test "findSlotContainingCard - empty board returns null" {
+    const board = Board{};
+
+    const slot = board.findSlotContainingCard(makeCard(Suit.Hearts, 1));
+
+    try std.testing.expect(slot == null);
+}
+
+test "findSlotContainingCard - all four foundation piles" {
+    var board = Board{};
+    board.piles[0] = 3; // Spades
+    board.piles[1] = 7; // Clubs
+    board.piles[2] = 12; // Hearts
+    board.piles[3] = 13; // Diamonds (complete)
+
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Spades, 3)) == 12);
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Clubs, 7)) == 13);
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Hearts, 12)) == 14);
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Diamonds, 13)) == 15);
+}
+
+test "findSlotContainingCard - empty foundation piles return null" {
+    var board = Board{};
+    board.piles[0] = 0;
+    board.piles[1] = 0;
+    board.piles[2] = 0;
+    board.piles[3] = 0;
+
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Spades, 1)) == null);
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Hearts, 1)) == null);
+}
+
+test "findSlotContainingCard - empty columns return null" {
+    var board = Board{};
+    board.columns[0] = .{ 0, 0 };
+    board.columns[1] = .{ 0, 0 };
+
+    try std.testing.expect(board.findSlotContainingCard(makeCard(Suit.Hearts, 1)) == null);
 }

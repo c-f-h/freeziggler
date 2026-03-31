@@ -131,7 +131,7 @@ fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path)
 
         for (valid_moves) |move| {
             var new_board = board.*;
-            new_board.makeMove(move);
+            new_board.makeMove(move, false);
 
             const new_hash = new_board.hash();
             const new_cost = cur_node.best_cost + 1;
@@ -200,7 +200,7 @@ fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.
 
     for (valid_moves) |move| {
         var new_board = board.*;
-        new_board.makeMove(move);
+        new_board.makeMove(move, false);
         if (try solveDFS(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
@@ -231,7 +231,7 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
 
     for (valid_moves, 0..) |move, i| {
         var new_board = board.*;
-        new_board.makeMove(move);
+        new_board.makeMove(move, false);
         move_heuristic[i] = MovePair{ .move = move, .heuristic = heuristic(&new_board) };
     }
 
@@ -240,7 +240,7 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
     for (move_heuristic) |*move_pair| {
         const move = move_pair.move;
         var new_board = board.*;
-        new_board.makeMove(move);
+        new_board.makeMove(move, false);
         if (try solveBestFirstSearch(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
@@ -263,5 +263,40 @@ pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *
 fn printMoves(moves: []const Move) void {
     for (moves) |move| {
         std.debug.print("  slot {d} -> slot {d}\n", .{ move.from, move.to });
+    }
+}
+
+/// Given the original and the sorted game board, remap the path for the sorted board back to the original board's column indices.
+pub fn remapPath(original_board: *const Board, remapped_board: *const Board, path: []Move, orig_path: *[]Move) void {
+    if (orig_path.len < path.len) @panic("Real path buffer too small");
+    orig_path.len = 0;
+    var orig = original_board.*;
+    var remapped = remapped_board.*;
+    for (path) |move| {
+        const card = remapped.cardInSlot(move.from);
+        const orig_from = orig.findSlotContainingCard(card) orelse @panic("Card not found in original board");
+
+        var orig_to: u8 = undefined;
+        if (move.to < NUM_COLUMNS) {
+            const below_card = remapped.cardInSlot(move.to);
+            if (below_card != CARD_NONE) {
+                orig_to = orig.findSlotContainingCard(below_card) orelse @panic("Below card not found in original board");
+            } else {
+                // Moving to an empty column - find the first empty column in the original board
+                orig_to = orig.findEmptyColumn() orelse @panic("No empty column found in original board");
+            }
+        } else if (move.to < NUM_COLUMNS + 4) {
+            // Moving to a free cell - find the first empty free cell in the original board
+            orig_to = orig.findEmptyFreeCell() orelse @panic("No empty free cell found in original board");
+        } else {
+            orig_to = move.to; // Moving to a foundation pile - same index in original and remapped board
+        }
+
+        const orig_move = Move{ .from = orig_from, .to = orig_to };
+        if (!orig.isValidMove(orig_move)) @panic("Invalid move in original board");
+        orig_path.len += 1;
+        orig_path.*[orig_path.len - 1] = orig_move;
+        orig.makeMove(orig_move, true);
+        remapped.makeMove(move, false);
     }
 }
