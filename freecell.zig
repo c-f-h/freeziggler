@@ -13,6 +13,7 @@ const solveFreeCell = solver.solveFreeCell;
 const Path = solver.Path;
 
 const verbose = true;
+const IMPROVE_PATH_ATTEMPTS: u32 = 1000000;
 
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -44,13 +45,15 @@ pub fn main(init: std.process.Init) !void {
         }
 
         var solution_path: Path = .empty;
-        const found, const iters = try solveFreeCell(game_board, allocator, &solution_path);
+        const found, const iters = try solver.solveDFS(&game_board, allocator, &solution_path);
         total_length += solution_path.items.len;
         total_iters += iters;
 
-        //if (found) {
-        //    try solver.improvePath(&game_board, solution_path.items, allocator);
-        //}
+        if (found and IMPROVE_PATH_ATTEMPTS > 0) {
+            while (try solver.improvePath(&game_board, &solution_path, IMPROVE_PATH_ATTEMPTS, allocator)) {
+                std.debug.print("Found improved path! New length: {d}\n", .{solution_path.items.len});
+            }
+        }
 
         const path_length = solution_path.items.len;
         var true_path = try allocator.alloc(Move, path_length);

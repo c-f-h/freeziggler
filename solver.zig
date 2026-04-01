@@ -72,7 +72,7 @@ const AStarClosedNode = struct {
     move: Move,
 };
 
-fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
+pub fn solveAStar(starting_board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     // Hash map of nodes yet to be visited
     var open_set = std.AutoHashMap(u64, AStarNode).init(allocator);
     defer open_set.deinit();
@@ -168,6 +168,7 @@ fn solveAStar(starting_board: *Board, allocator: std.mem.Allocator, path: *Path)
             try path.append(allocator, path_node.move);
             current_hash = path_node.parent_hash;
         }
+        std.mem.reverse(Move, path.items);
         return .{ true, open_set.count() + closed_set.count() };
     }
 
@@ -180,7 +181,7 @@ fn compareMoves(_: void, a: MovePair, b: MovePair) bool {
     return a.heuristic < b.heuristic;
 }
 
-fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
+fn solveDFSRecursive(board: *const Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
     if (board.isWon()) {
         return true;
     }
@@ -197,7 +198,7 @@ fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.
     for (valid_moves) |move| {
         var new_board = board.*;
         new_board.makeMove(move);
-        if (try solveDFS(&new_board, visited, allocator, path)) {
+        if (try solveDFSRecursive(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
         }
@@ -206,7 +207,17 @@ fn solveDFS(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.
     return false;
 }
 
-fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
+pub fn solveDFS(board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+    const solved = try solveDFSRecursive(board, &visited, allocator, path);
+    if (solved) {
+        std.mem.reverse(Move, path.items);
+    }
+    return .{ solved, visited.count() };
+}
+
+fn solveBestFirstSearchRecursive(board: *const Board, visited: *std.AutoHashMap(u64, void), allocator: std.mem.Allocator, path: *Path) !bool {
     const DFS_BUFFER_SIZE = 512;
     if (board.isWon()) {
         return true;
@@ -237,7 +248,7 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
         const move = move_pair.move;
         var new_board = board.*;
         new_board.makeMove(move);
-        if (try solveBestFirstSearch(&new_board, visited, allocator, path)) {
+        if (try solveBestFirstSearchRecursive(&new_board, visited, allocator, path)) {
             try path.append(allocator, move);
             return true;
         }
@@ -246,14 +257,14 @@ fn solveBestFirstSearch(board: *Board, visited: *std.AutoHashMap(u64, void), all
     return false;
 }
 
-pub fn solveFreeCell(initial_board: Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
-    var board = initial_board;
-
-    const result = try solveAStar(&board, allocator, path);
-    if (result[0]) {
+pub fn solveBestFirstSearch(board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
+    var visited = std.AutoHashMap(u64, void).init(allocator);
+    defer visited.deinit();
+    const solved = try solveBestFirstSearchRecursive(board, &visited, allocator, path);
+    if (solved) {
         std.mem.reverse(Move, path.items);
     }
-    return result;
+    return .{ solved, visited.count() };
 }
 
 fn printMoves(moves: []const Move) void {
@@ -262,21 +273,11 @@ fn printMoves(moves: []const Move) void {
     }
 }
 
-fn printPathBackwards(nodes: *const std.AutoHashMap(u64, AStarNode), current_hash: u64) void {
-    var hash = current_hash;
-    while (true) {
-        const node = nodes.getPtr(hash) orelse break;
-        if (node.parent_hash == 0) break;
-        std.debug.print("  slot {d:>2} -> slot {d:>2}, cost: {d}, hash: {x}, heuristic: {d}\n", .{ node.move.from, node.move.to, node.best_cost, hash & 0xffff, node.heuristic_value });
-        hash = node.parent_hash;
-    }
-}
-
-pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocator) !void {
+pub fn improvePath(board: *const Board, path: *Path, max_attempts: usize, allocator: std.mem.Allocator) !bool {
     var known_nodes = std.AutoHashMap(u64, AStarNode).init(allocator);
     defer known_nodes.deinit();
 
-    var path_hashes = try allocator.alloc(u64, path.len + 1);
+    var path_hashes = try allocator.alloc(u64, path.items.len + 1);
     defer allocator.free(path_hashes);
 
     // init known nodes and path_hashes
@@ -297,7 +298,7 @@ pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocat
         path_hashes[0] = prev_hash;
 
         // insert nodes for the current best known path
-        for (path, 1..) |move, state_index| {
+        for (path.items, 1..) |move, state_index| {
             current_board.makeMove(move);
             const board_hash = current_board.hash();
             path_hashes[state_index] = board_hash;
@@ -319,19 +320,18 @@ pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocat
 
     // seed breadth-first search from a subset of nodes on the known solution path
     var i: usize = 0;
-    while (i < path_hashes.len) : (i += 5) {
+    while (i < path_hashes.len) : (i += 15) {
         try queue.pushFront(allocator, path_hashes[i]);
     }
 
-    const NUM_ATTEMPTS = 10000000;
-    var attempts: u32 = NUM_ATTEMPTS;
-    var improved_node: u64 = 0;
+    var attempt: u32 = 0;
+    var success = false;
 
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
 
     // use breadth-first search to try to find a shortcut to a node on the known solution path
-    outer_loop: while (attempts > 0) : (attempts -= 1) {
+    outer_loop: while (attempt < max_attempts) : (attempt += 1) {
         // pop a node from the queue and explore its neighbors
         const cur_hash = queue.popBack() orelse break;
         // NB: cannot use getPtr here as put() later on may invalidate the pointer
@@ -359,14 +359,16 @@ pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocat
             if (known_nodes.getPtr(new_hash)) |existing| {
                 // already known node - check if this is a shorter path to a solution
                 if (cur_node.best_cost + 1 < existing.best_cost) {
+                    if (existing.heuristic_value != 0) {
+                        std.debug.print("Found improved path to node with hash {x}: old cost = {d}, new cost = {d}\n", .{ new_hash & 0xffff, existing.best_cost, cur_node.best_cost + 1 });
+                        success = true;
+                    }
+
                     existing.best_cost = cur_node.best_cost + 1;
                     existing.parent_hash = cur_hash;
                     existing.move = move;
 
-                    if (existing.heuristic_value != 0) {
-                        std.debug.print("Found improved path to node with hash {x}: old cost = {d}, new cost = {d}\n", .{ new_hash & 0xffff, existing.best_cost, cur_node.best_cost + 1 });
-                        printPathBackwards(&known_nodes, new_hash);
-                        improved_node = new_hash;
+                    if (success) {
                         break :outer_loop;
                     }
                 }
@@ -384,11 +386,25 @@ pub fn improvePath(board: *const Board, path: []Move, allocator: std.mem.Allocat
         }
     }
 
-    if (improved_node != 0) {
-        std.debug.print("Found improved path after {d} attempts\n", .{NUM_ATTEMPTS - attempts});
+    if (success) {
+        // reconstruct improved path
+        std.debug.print("Found improved path after {d} attempts\n", .{attempt});
+        var idx: usize = 0;
+        var hash = path_hashes[path_hashes.len - 1];
+        while (true) {
+            const node = known_nodes.getPtr(hash) orelse @panic("Failed to reconstruct improved path");
+            if (node.parent_hash == 0) break;
+            path.items[idx] = node.move;
+            idx += 1;
+            hash = node.parent_hash;
+        }
+        if (idx > path.items.len) @panic("Improved path is longer than original path");
+        try path.resize(allocator, idx);
+        std.mem.reverse(Move, path.items);
+        return true;
     } else {
-        std.debug.print("No improved path found after {d} attempts\n", .{NUM_ATTEMPTS - attempts});
-        return;
+        std.debug.print("No improved path found after {d} attempts\n", .{attempt});
+        return false;
     }
 }
 
