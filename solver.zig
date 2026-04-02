@@ -360,7 +360,7 @@ pub fn improvePath(board: *const Board, path: *Path, max_attempts: usize, alloca
                 // already known node - check if this is a shorter path to a solution
                 if (cur_node.best_cost + 1 < existing.best_cost) {
                     if (existing.heuristic_value != 0) {
-                        std.debug.print("Found improved path to node with hash {x}: old cost = {d}, new cost = {d}\n", .{ new_hash & 0xffff, existing.best_cost, cur_node.best_cost + 1 });
+                        std.debug.print("Found improved path to node with hash {x} after {d} attempts: old cost = {d}, new cost = {d}\n", .{ new_hash & 0xffff, attempt, existing.best_cost, cur_node.best_cost + 1 });
                         success = true;
                     }
 
@@ -388,7 +388,6 @@ pub fn improvePath(board: *const Board, path: *Path, max_attempts: usize, alloca
 
     if (success) {
         // reconstruct improved path
-        std.debug.print("Found improved path after {d} attempts\n", .{attempt});
         var idx: usize = 0;
         var hash = path_hashes[path_hashes.len - 1];
         while (true) {

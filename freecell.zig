@@ -45,7 +45,7 @@ pub fn main(init: std.process.Init) !void {
         }
 
         var solution_path: Path = .empty;
-        const found, const iters = try solver.solveDFS(&game_board, allocator, &solution_path);
+        const found, const iters = try solver.solveAStar(&game_board, allocator, &solution_path);
         total_length += solution_path.items.len;
         total_iters += iters;
 
