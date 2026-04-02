@@ -3,6 +3,9 @@ const board_mod = @import("board.zig");
 const card_mod = @import("card.zig");
 const freecell_mod = @import("freecell.zig");
 
+const verztable = @import("hashmap/verztable.zig");
+//const ripmap = @import("hashmap/ripmap.zig");
+
 const Board = board_mod.Board;
 const Move = board_mod.Move;
 const Card = card_mod.Card;
@@ -50,14 +53,38 @@ const AStarNode = struct {
     move: Move, // Move taken from parent state to reach this state
 };
 
-fn nodePriority(node_map: *std.AutoHashMap(u64, AStarNode), hash: u64) u32 {
+/// A context to use for a HashMap where the keys are already hashed values.
+/// Avoids double hashing of the keys for performance.
+const AlreadyHashedContext = struct {
+    pub fn hash(_: AlreadyHashedContext, value: u64) u64 {
+        return value;
+    }
+    pub fn eql(_: AlreadyHashedContext, a: u64, b: u64) bool {
+        return a == b;
+    }
+};
+
+fn trivialHash(value: u64) u64 {
+    return value;
+}
+fn trivialEql(a: u64, b: u64) bool {
+    return a == b;
+}
+
+fn u64HashMap(ValueType: type) type {
+    //return std.HashMap(u64, ValueType, AlreadyHashedContext, 80);
+    return verztable.HashMapWithFns(u64, ValueType, trivialHash, trivialEql);
+    //return ripmap.Map32(u64, ValueType, AlreadyHashedContext, 80);
+}
+
+fn nodePriority(node_map: *u64HashMap(AStarNode), hash: u64) u32 {
     if (node_map.getPtr(hash)) |node| {
         return @as(u32, node.best_cost) + @as(u32, node.heuristic_value);
     }
     return std.math.maxInt(u32);
 }
 
-fn bpCompare(node_map: *std.AutoHashMap(u64, AStarNode), a: u64, b: u64) std.math.Order {
+fn compareAStarPriority(node_map: *u64HashMap(AStarNode), a: u64, b: u64) std.math.Order {
     const a_priority = nodePriority(node_map, a);
     const b_priority = nodePriority(node_map, b);
     if (a_priority > b_priority) {
@@ -77,14 +104,14 @@ const AStarClosedNode = struct {
 
 pub noinline fn solveAStar(starting_board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     // Hash map of nodes yet to be visited
-    var open_set = std.AutoHashMap(u64, AStarNode).init(allocator);
+    var open_set = u64HashMap(AStarNode).init(allocator);
     defer open_set.deinit();
 
     // Hash map of already visited nodes
-    var closed_set = std.AutoHashMap(u64, AStarClosedNode).init(allocator);
+    var closed_set = u64HashMap(AStarClosedNode).init(allocator);
     defer closed_set.deinit();
 
-    var pqueue = std.PriorityQueue(u64, *std.AutoHashMap(u64, AStarNode), bpCompare).initContext(&open_set);
+    var pqueue = std.PriorityQueue(u64, *u64HashMap(AStarNode), compareAStarPriority).initContext(&open_set);
 
     const start_hash = starting_board.hash();
     try open_set.put(start_hash, AStarNode{
