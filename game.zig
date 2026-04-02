@@ -21,12 +21,7 @@ pub fn createRandomBoard(seed: u64) Board {
     var rng = std.Random.DefaultPrng.init(seed);
     var deck = makeDeck();
     std.Random.shuffle(rng.random(), u8, &deck);
-    var board = Board.init(&deck);
-    if (board_mod.KEEP_COLUMNS_SORTED) {
-        board.sortColumns();
-    }
-    board.reallocateColumns();
-    return board;
+    return Board.init(&deck);
 }
 
 pub fn parseCardString(s: []const u8) !Card {

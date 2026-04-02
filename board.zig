@@ -304,7 +304,7 @@ pub const Board = struct {
     }
 
     /// Find all valid moves (from any slot to any other slot).
-    pub fn findValidMoves(board: *const Board, buffer: []Move) []Move {
+    pub noinline fn findValidMoves(board: *const Board, buffer: []Move) []Move {
         var count: usize = 0;
 
         // Check source slots: columns and free cells (0-11)

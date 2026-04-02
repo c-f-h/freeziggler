@@ -1,6 +1,7 @@
 const std = @import("std");
 const board_mod = @import("board.zig");
 const card_mod = @import("card.zig");
+const freecell_mod = @import("freecell.zig");
 
 const Board = board_mod.Board;
 const Move = board_mod.Move;
@@ -9,6 +10,8 @@ const CARD_NONE = card_mod.CARD_NONE;
 const canMoveBelow = card_mod.canMoveBelow;
 const NUM_COLUMNS = board_mod.NUM_COLUMNS;
 const makeCard = board_mod.makeCard;
+
+const verbose = freecell_mod.verbose;
 
 pub const Path = std.ArrayList(Move);
 
@@ -72,7 +75,7 @@ const AStarClosedNode = struct {
     move: Move,
 };
 
-pub fn solveAStar(starting_board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
+pub noinline fn solveAStar(starting_board: *const Board, allocator: std.mem.Allocator, path: *Path) !struct { bool, usize } {
     // Hash map of nodes yet to be visited
     var open_set = std.AutoHashMap(u64, AStarNode).init(allocator);
     defer open_set.deinit();
@@ -119,10 +122,8 @@ pub fn solveAStar(starting_board: *const Board, allocator: std.mem.Allocator, pa
         const valid_moves = board.findValidMoves(&move_buffer);
 
         num_iter += 1;
-        if (num_iter % 100000 == 0) {
-            std.debug.print("Iteration {d}, queue length {d}, {d} hashes, found {d} valid moves:\n", .{ num_iter, pqueue.count(), closed_set.count(), valid_moves.len });
-            board.print();
-            printMoves(valid_moves);
+        if (verbose and num_iter % 100000 == 0) {
+            std.debug.print("Iteration {d}, queue length {d}, {d} hashes, found {d} valid moves\n", .{ num_iter, pqueue.count(), closed_set.count(), valid_moves.len });
         }
 
         for (valid_moves) |move| {

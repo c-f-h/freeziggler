@@ -12,15 +12,15 @@ const cardName = card.cardName;
 const solveFreeCell = solver.solveFreeCell;
 const Path = solver.Path;
 
-const verbose = true;
-const IMPROVE_PATH_ATTEMPTS: u32 = 1000000;
+pub const verbose = false;
+const IMPROVE_PATH_ATTEMPTS: u32 = 0;
 
 pub fn main(init: std.process.Init) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    const input_board = try game.parseJsonGame(allocator);
+    //const input_board = try game.parseJsonGame(allocator);
 
     var stdout_buf: [256]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(init.io, &stdout_buf);
@@ -28,10 +28,12 @@ pub fn main(init: std.process.Init) !void {
 
     const time_start = std.Io.Clock.now(std.Io.Clock.real, init.io);
 
-    var seed: u32 = 29;
+    var seed: u32 = 0;
     var total_length: u64 = 0;
     var total_iters: u64 = 0;
     while (seed < 30) : (seed += 1) {
+        const input_board = game.createRandomBoard(seed);
+
         var game_board = input_board;
         if (board.KEEP_COLUMNS_SORTED) {
             game_board.sortColumns();
@@ -56,13 +58,14 @@ pub fn main(init: std.process.Init) !void {
         }
 
         const path_length = solution_path.items.len;
-        var true_path = try allocator.alloc(Move, path_length);
-        solver.remapPath(&input_board, &game_board, solution_path.items, &true_path);
 
         if (verbose) {
             std.debug.print("Solver completed. Found solution: {}. Path length: {d}. Iterations: {d}\n", .{ found, path_length, iters });
 
             if (found) {
+                var true_path = try allocator.alloc(Move, path_length);
+                solver.remapPath(&input_board, &game_board, solution_path.items, &true_path);
+
                 var verify_board = input_board;
                 for (true_path, 0..) |move, i| {
                     std.debug.print("  {d:>3}: slot {d:>2} -> slot {d:>2}    {s}\n", .{ i + 1, move.from, move.to, cardName(verify_board.cardInSlot(move.from)) });
