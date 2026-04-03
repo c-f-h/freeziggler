@@ -409,8 +409,13 @@ pub const Board = struct {
             const end = col[1];
             if (start < end) {
                 hasher.update(board.cards[start..end]);
+
+                // NB: This optimization of hashing the delimiter only after non-empty columns is only correct
+                // because we maintain the columns in a well-defined, sorted order. Otherwise, two different states
+                // with the same column stacks in different slots would receive the same hash.
+                hasher.update(&delimiter);
             }
-            hasher.update(&delimiter);
+            //hasher.update(&delimiter);
         }
         return hasher.final();
     }
